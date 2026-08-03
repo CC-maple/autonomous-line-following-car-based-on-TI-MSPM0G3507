@@ -1,16 +1,17 @@
 #include "encoder.h"
 #include "ti_msp_dl_config.h"//用户自定义名称所在头文件
+#include "control.h"
 
 int cnt = 0;
 int64_t enc_cnt[4];
 // uint8_t mode=4;//
-uint8_t mode=5;//暂时改为2
+uint8_t mode=0;
+uint8_t begin=0;
 
 void Encoder_Init(void)
 {
 	NVIC_EnableIRQ(GPIOB_INT_IRQn);
 }
-
 
 void GROUP1_IRQHandler(void)
 {
@@ -18,19 +19,19 @@ void GROUP1_IRQHandler(void)
      GPIO_Switch_PIN_S1_PIN | GPIO_Switch_PIN_S2_PIN | GPIO_Switch_PIN_S3_PIN | GPIO_Switch_PIN_S4_PIN);
      
      if (gpio_Switch&GPIO_Switch_PIN_S1_PIN) {
-        mode = 1;
+        begin = 1;
         DL_GPIO_clearInterruptStatus(GPIO_Switch_PORT, GPIO_Switch_PIN_S1_PIN);
      }
      else if (gpio_Switch&GPIO_Switch_PIN_S2_PIN) {
-        mode = 2;
+        mode += 1;
         DL_GPIO_clearInterruptStatus(GPIO_Switch_PORT, GPIO_Switch_PIN_S2_PIN);
      }
      else if (gpio_Switch&GPIO_Switch_PIN_S3_PIN) {
-        mode = 3;
+        mode4_angle_change+=0.2;
         DL_GPIO_clearInterruptStatus(GPIO_Switch_PORT, GPIO_Switch_PIN_S3_PIN);
      }
      else if (gpio_Switch&GPIO_Switch_PIN_S4_PIN) {
-        mode = 4;
+        mode4_angle_change-=0.2;
         DL_GPIO_clearInterruptStatus(GPIO_Switch_PORT, GPIO_Switch_PIN_S4_PIN);
      }
 
