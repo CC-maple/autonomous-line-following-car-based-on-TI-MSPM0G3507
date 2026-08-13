@@ -322,10 +322,10 @@ void mode3_turn_angle(float mode3_target_angle)
     }
     speed_left = limit_control(speed_left, -30, 30);
     speed_right = limit_control(speed_right, -30, 30);
-    Load(speed_left, speed_right, speed_left,speed_right);
     angle_error = control_abs_diff_i64((int64_t)Angle[2], (int64_t)mode3_target_angle);
 
     if (angle_error <= 1u) {
+        brake();
         if (mode3_target_angle == MODE3_1_Angle1) {//根据模式不同选择跳转不同的模式
             mode3_1 = 2;
         }
@@ -338,6 +338,9 @@ void mode3_turn_angle(float mode3_target_angle)
         else if (mode3_target_angle == MODE3_1_Angle5) {
             mode3_1=10;
         }
+    }
+    else {
+        Load(speed_left, speed_right, speed_left,speed_right);
     }                                                                                                                          
 }
 
@@ -460,28 +463,30 @@ void TIMG0_IRQHandler(void)
                                 Sign_LED_Bee();
                                 mode2_bee=1;
                             }
-
-                            pid_angle=Angle_PID(Angle[2], -179);
-                            speed_left+=pid_angle;
-                            speed_right-=pid_angle;
-                            speed_left = limit_control(speed_left, -30, 30);
-                            speed_right = limit_control(speed_right, -30, 30);
-                            Load(speed_left, speed_right, speed_left,speed_right);
-                            if (  (control_abs_i64((int64_t)(Angle[2] + 179)) < 2u) ||
-                                 (control_abs_i64((int64_t)(Angle[2] - 179)) < 2u)  ) {
-                                // brake();
-                                // //-----------//
-                                // Sign_LED_Bee();
-
-                                mode2_1=1,mode2_2=1;
+                            else {
+                                pid_angle=Angle_PID(Angle[2], -179);
+                                speed_left+=pid_angle;
+                                speed_right-=pid_angle;
+                                speed_left = limit_control(speed_left, -30, 30);
+                                speed_right = limit_control(speed_right, -30, 30);
+                                if (  (control_abs_i64((int64_t)(Angle[2] + 179)) < 2u) ||
+                                     (control_abs_i64((int64_t)(Angle[2] - 179)) < 2u)  ) {
+                                    brake();
+                                    mode2_1=1,mode2_2=1;
+                                }
+                                else {
+                                    Load(speed_left, speed_right, speed_left,speed_right);
+                                }
                             }
 
                         }
                                 
-                    speed_left=limit_control(speed_left, 10, 65);
-                    speed_right=limit_control(speed_right, 5, 60);
-                    Load(speed_left,speed_right,speed_left,speed_right);
-                    encoder_read(&EncoderA,&EncoderB, &EncoderC,&EncoderD);//更新编码器值
+                    if (huidu_data_sum!=6) {
+                        speed_left=limit_control(speed_left, 10, 65);
+                        speed_right=limit_control(speed_right, 5, 60);
+                        Load(speed_left,speed_right,speed_left,speed_right);
+                        encoder_read(&EncoderA,&EncoderB, &EncoderC,&EncoderD);//更新编码器值
+                    }
                     }
 
 
@@ -507,7 +512,7 @@ void TIMG0_IRQHandler(void)
                         }
                     }
                     //巡线D------A
-                    if (mode2_1==0&&mode2_2==1) {
+                    else if (mode2_1==0&&mode2_2==1) {
                         if (huidu_data[1]==0) {
                         speed_left = 0.8*speed_const;
                         //speed_left -= 5;
@@ -556,10 +561,12 @@ void TIMG0_IRQHandler(void)
                             mode=0;
                             mode2_1=0;mode2_2=0;
                         }
-                        speed_left=limit_control(speed_left, 10, 65);
-                        speed_right=limit_control(speed_right, 5, 60);
-                        Load(speed_left,speed_right,speed_left,speed_right);
-                        encoder_read(&EncoderA,&EncoderB, &EncoderC,&EncoderD);//更新编码器值
+                        if (huidu_data_sum!=6) {
+                            speed_left=limit_control(speed_left, 10, 65);
+                            speed_right=limit_control(speed_right, 5, 60);
+                            Load(speed_left,speed_right,speed_left,speed_right);
+                            encoder_read(&EncoderA,&EncoderB, &EncoderC,&EncoderD);//更新编码器值
+                        }
                     }
 
 
@@ -666,10 +673,12 @@ void TIMG0_IRQHandler(void)
                                 mode3_1=6;
                             }
                         }
-                        speed_left=limit_control(speed_left, 10, 65);
-                        speed_right=limit_control(speed_right, 5, 60);
-                        Load(speed_left,speed_right,speed_left,speed_right);
-                        encoder_read(&EncoderA,&EncoderB, &EncoderC,&EncoderD);//更新编码器值
+                        if (huidu_data_sum!=6) {
+                            speed_left=limit_control(speed_left, 10, 65);
+                            speed_right=limit_control(speed_right, 5, 60);
+                            Load(speed_left,speed_right,speed_left,speed_right);
+                            encoder_read(&EncoderA,&EncoderB, &EncoderC,&EncoderD);//更新编码器值
+                        }
                     }
                     else if (mode3_1==6) {
                         mode3_go_line(MODE3_1_Line3, MODE3_1_Angle3);
@@ -740,10 +749,12 @@ void TIMG0_IRQHandler(void)
                             mode3_1=12;
                             mode=0;
                         }
-                    speed_left=limit_control(speed_left, 10, 65);
-                    speed_right=limit_control(speed_right, 5, 60);
-                    Load(speed_left,speed_right,speed_left,speed_right);
-                    encoder_read(&EncoderA,&EncoderB, &EncoderC,&EncoderD);//更新编码器值
+                        if (huidu_data_sum!=6) {
+                            speed_left=limit_control(speed_left, 10, 65);
+                            speed_right=limit_control(speed_right, 5, 60);
+                            Load(speed_left,speed_right,speed_left,speed_right);
+                            encoder_read(&EncoderA,&EncoderB, &EncoderC,&EncoderD);//更新编码器值
+                        }
                     }
 
                 }
@@ -1426,6 +1437,7 @@ void TIMG0_IRQHandler(void)
                     mode4_huidu_updata();
                 }
                 else {
+                    brake();
                     begin=0;//mode 值都不对，则返回begin 0 
                 }
 
@@ -1435,8 +1447,10 @@ void TIMG0_IRQHandler(void)
         {
             huidu_updata();
             mode4_huidu_updata();
-            if(mode>7)
+            if(mode>7) {
+                brake();
                 mode=0;
+            }
         }
 			break;
 

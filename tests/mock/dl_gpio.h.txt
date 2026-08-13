@@ -1,0 +1,14 @@
+#ifndef MOCK_DL_GPIO_H
+#define MOCK_DL_GPIO_H
+#include <stdint.h>
+#define GPIOA ((void *)0x1)
+#define GPIOB ((void *)0x2)
+#define DL_GPIO_PIN_12 12u
+#define DL_GPIO_PIN_13 13u
+#define DL_GPIO_PIN_14 14u
+#define DL_GPIO_PIN_15 15u
+#define DL_GPIO_PIN_16 16u
+#define DL_GPIO_PIN_27 27u
+void DL_GPIO_setPins(void *port, uint32_t pins);
+void DL_GPIO_clearPins(void *port, uint32_t pins);
+#endif

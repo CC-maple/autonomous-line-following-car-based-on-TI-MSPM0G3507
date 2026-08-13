@@ -113,6 +113,11 @@ DL_TimerG_setCaptureCompareValue(TIMA0,motor4,DL_TIMER_CC_3_INDEX);
 //刹车函数
 void brake(void)
 {
+        DL_TimerG_setCaptureCompareValue(TIMA0, 0, DL_TIMER_CC_0_INDEX);
+        DL_TimerG_setCaptureCompareValue(TIMA0, 0, DL_TIMER_CC_1_INDEX);
+        DL_TimerG_setCaptureCompareValue(TIMA0, 0, DL_TIMER_CC_2_INDEX);
+        DL_TimerG_setCaptureCompareValue(TIMA0, 0, DL_TIMER_CC_3_INDEX);
+
         AIN1_OUT(1);
         AIN2_OUT(1);
 

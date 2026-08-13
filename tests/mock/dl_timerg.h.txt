@@ -1,0 +1,10 @@
+#ifndef MOCK_DL_TIMERG_H
+#define MOCK_DL_TIMERG_H
+#include <stdint.h>
+#define TIMA0 ((void *)0x3)
+#define DL_TIMER_CC_0_INDEX 0
+#define DL_TIMER_CC_1_INDEX 1
+#define DL_TIMER_CC_2_INDEX 2
+#define DL_TIMER_CC_3_INDEX 3
+void DL_TimerG_setCaptureCompareValue(void *timer, uint32_t value, int index);
+#endif
