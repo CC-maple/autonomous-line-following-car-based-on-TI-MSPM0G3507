@@ -3,6 +3,7 @@
 #include  "encoder.h"
 #include "motor.h"
 #include "control_math.h"
+#include "sensor_snapshot.h"
 #include "signal_state.h"
 #include "oled.h"
 // #include <cstdint>
@@ -52,7 +53,7 @@ uint8_t mode4_flag=0; //模式4的细分模式
 uint8_t mode4_color_flag;//color=0 多次识别到黑线，否则：color=1(处于白色区)
 uint8_t mode4_color_nums;//颜色记数，防止误检测，成功记数后记得清零
 
-void mode4_huidu_updata();
+void mode4_huidu_updata(void);
 int32_t mode4_huidu_read_status=1;
 int8_t mode4_huidu_data[8];
 int8_t mode4_huidu_data_sum;
@@ -78,7 +79,6 @@ uint8_t mode4_circle_nums=0;
 uint16_t mode3_1_angle4_change = MODE3_1_Line4;
 #define MODE3_1_Angle5 -179
 
-uint8_t i;
 #define Integral_bias_MAX 5
 #define Integral_bias_MIN 1
 #define SIGNAL_DURATION_TICKS 25u
@@ -203,58 +203,20 @@ int limit_control(int x,int x_min, int x_max)
     return x;
 }
 
-void huidu_updata()
+void huidu_updata(void)
 {
-    huidu_read_status = DL_GPIO_readPins( GPIOA,
-                GPIO_Sensor_PIN_huidu6_PIN | GPIO_Sensor_PIN_huidu5_PIN | GPIO_Sensor_PIN_huidu4_PIN |
-                GPIO_Sensor_PIN_huidu3_PIN| GPIO_Sensor_PIN_huidu2_PIN | GPIO_Sensor_PIN_huidu1_PIN);
-    huidu_data_sum=0;//求和前清零
-    for (i=1;i<=6;i++) {
-        huidu_data_sum+=huidu_data[i];//更新求和
-    }
+    static const uint32_t pin_masks[] = {
+        GPIO_Sensor_PIN_huidu1_PIN, GPIO_Sensor_PIN_huidu2_PIN,
+        GPIO_Sensor_PIN_huidu3_PIN, GPIO_Sensor_PIN_huidu4_PIN,
+        GPIO_Sensor_PIN_huidu5_PIN, GPIO_Sensor_PIN_huidu6_PIN
+    };
 
-    if ((huidu_read_status & GPIO_Sensor_PIN_huidu1_PIN)) {
-    huidu_data[1]=1;
-    }
-    else {
-    huidu_data[1]=0;
-    }
-
-    if (huidu_read_status & GPIO_Sensor_PIN_huidu2_PIN) {
-        huidu_data[2]=1;
-    }
-    else {
-        huidu_data[2]=0;
-    }
-
-    if (huidu_read_status & GPIO_Sensor_PIN_huidu3_PIN) {
-        huidu_data[3]=1;
-    }
-    else {
-        huidu_data[3]=0;
-    }
-
-    if (huidu_read_status & GPIO_Sensor_PIN_huidu4_PIN) {
-        huidu_data[4]=1;
-        }
-    else {
-    huidu_data[4]=0;
-    }
-
-    if (huidu_read_status & GPIO_Sensor_PIN_huidu5_PIN) {
-    huidu_data[5]=1;
-    }
-    else {
-    huidu_data[5]=0;
-    }
-
-    if (huidu_read_status & GPIO_Sensor_PIN_huidu6_PIN) {
-    huidu_data[6]=1;
-    }
-    else {
-    huidu_data[6]=0;
-    }
-    
+    huidu_read_status = DL_GPIO_readPins(
+        GPIOA, GPIO_Sensor_PIN_huidu6_PIN | GPIO_Sensor_PIN_huidu5_PIN |
+        GPIO_Sensor_PIN_huidu4_PIN | GPIO_Sensor_PIN_huidu3_PIN |
+        GPIO_Sensor_PIN_huidu2_PIN | GPIO_Sensor_PIN_huidu1_PIN);
+    huidu_data_sum = sensor_snapshot_decode(
+        (uint32_t)huidu_read_status, pin_masks, &huidu_data[1], 6u);
 }
 
 void mode3_go_line(uint64_t mode3_target_line, float mode3_line_angle){
@@ -312,7 +274,6 @@ void mode3_only_go_line(float mode3_line_angle){
     speed_right-=pid_ans;
     speed_left = limit_control(speed_left, 10, 30);
     speed_right = limit_control(speed_right, 10, 30);
-    huidu_updata();
     if (huidu_data_sum!=6) {//退出条件：遇到黑线
         brake();
         mode3_1 += 1;//这里 已经 补充切换模式
@@ -1528,71 +1489,21 @@ int Mode4_line_PID(float reality_angle, float target_angle)
 // }
 
 // 独立灰度更新函数
-void mode4_huidu_updata()
+void mode4_huidu_updata(void)
 {
-    mode4_huidu_read_status = DL_GPIO_readPins( GPIOA,
-                GPIO_Sensor_PIN_huidu6_PIN | GPIO_Sensor_PIN_huidu5_PIN | GPIO_Sensor_PIN_huidu4_PIN |
-                GPIO_Sensor_PIN_huidu3_PIN| GPIO_Sensor_PIN_huidu2_PIN | GPIO_Sensor_PIN_huidu1_PIN |
-                GPIO_Sensor_PIN_huidu0_PIN| GPIO_Sensor_PIN_huidu7_PIN);
-    mode4_huidu_data_sum=0;//求和前清零
-    for (i=0;i<=7;i++) {
-        mode4_huidu_data_sum+=mode4_huidu_data[i];//更新求和
-    }
-    if ((mode4_huidu_read_status & GPIO_Sensor_PIN_huidu1_PIN)) {
-    mode4_huidu_data[1]=1;
-    }
-    else {
-    mode4_huidu_data[1]=0;
-    }
+    static const uint32_t pin_masks[] = {
+        GPIO_Sensor_PIN_huidu0_PIN, GPIO_Sensor_PIN_huidu1_PIN,
+        GPIO_Sensor_PIN_huidu2_PIN, GPIO_Sensor_PIN_huidu3_PIN,
+        GPIO_Sensor_PIN_huidu4_PIN, GPIO_Sensor_PIN_huidu5_PIN,
+        GPIO_Sensor_PIN_huidu6_PIN, GPIO_Sensor_PIN_huidu7_PIN
+    };
 
-    if (mode4_huidu_read_status & GPIO_Sensor_PIN_huidu2_PIN) {
-        mode4_huidu_data[2]=1;
-    }
-    else {
-        mode4_huidu_data[2]=0;
-    }
-
-    if (mode4_huidu_read_status & GPIO_Sensor_PIN_huidu3_PIN) {
-        mode4_huidu_data[3]=1;
-    }
-    else {
-        mode4_huidu_data[3]=0;
-    }
-
-    if (mode4_huidu_read_status & GPIO_Sensor_PIN_huidu4_PIN) {
-        mode4_huidu_data[4]=1;
-        }
-    else {
-    mode4_huidu_data[4]=0;
-    }
-
-    if (mode4_huidu_read_status & GPIO_Sensor_PIN_huidu5_PIN) {
-    mode4_huidu_data[5]=1;
-    }
-    else {
-    mode4_huidu_data[5]=0;
-    }
-
-    if (mode4_huidu_read_status & GPIO_Sensor_PIN_huidu6_PIN) {
-    mode4_huidu_data[6]=1;
-    }
-    else {
-    mode4_huidu_data[6]=0;
-    }
-    //----------------------------------------------------------
-
-    if (mode4_huidu_read_status & GPIO_Sensor_PIN_huidu0_PIN) {
-    mode4_huidu_data[0]=1;
-    }
-    else {
-    mode4_huidu_data[0]=0;
-    }
-
-    if (mode4_huidu_read_status & GPIO_Sensor_PIN_huidu7_PIN) {
-    mode4_huidu_data[7]=1;
-    }
-    else {
-    mode4_huidu_data[7]=0;
-    }
-
+    mode4_huidu_read_status = DL_GPIO_readPins(
+        GPIOA, GPIO_Sensor_PIN_huidu6_PIN | GPIO_Sensor_PIN_huidu5_PIN |
+        GPIO_Sensor_PIN_huidu4_PIN | GPIO_Sensor_PIN_huidu3_PIN |
+        GPIO_Sensor_PIN_huidu2_PIN | GPIO_Sensor_PIN_huidu1_PIN |
+        GPIO_Sensor_PIN_huidu0_PIN | GPIO_Sensor_PIN_huidu7_PIN);
+    mode4_huidu_data_sum = sensor_snapshot_decode(
+        (uint32_t)mode4_huidu_read_status, pin_masks,
+        mode4_huidu_data, 8u);
 }
