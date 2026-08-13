@@ -41,6 +41,29 @@ static inline int control_abs_int_saturating(int value)
     return magnitude > (uint64_t)INT_MAX ? INT_MAX : (int)magnitude;
 }
 
+static inline float control_wrap_degrees(float angle)
+{
+    while (angle >= 180.0f) {
+        angle -= 360.0f;
+    }
+    while (angle < -180.0f) {
+        angle += 360.0f;
+    }
+    return angle;
+}
+
+static inline float control_heading_error_degrees(float reality, float target)
+{
+    return control_wrap_degrees(reality - target);
+}
+
+static inline float control_heading_abs_error_degrees(float reality, float target)
+{
+    float error = control_heading_error_degrees(reality, target);
+
+    return error < 0.0f ? -error : error;
+}
+
 static inline uint8_t control_distance_reached(
     uint64_t traveled, uint64_t target, uint64_t tolerance)
 {

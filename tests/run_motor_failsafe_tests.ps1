@@ -23,11 +23,11 @@ $sourceChecks = [ordered]@{
         [System.Text.RegularExpressions.RegexOptions]::Singleline)
     Mode2TurnCompletionBrakes = [regex]::IsMatch(
         $controlSource, `
-        'Angle\[2\] - 179.*?\) \{\s*brake\(\);\s*mode2_1=1,mode2_2=1;.*?\}\s*else \{\s*Load', `
+        'control_heading_abs_error_degrees\(control_heading\(\), -179\.0f\).*?\) \{\s*brake\(\);\s*mode2_1=1,mode2_2=1;.*?\}\s*else \{\s*Load', `
         [System.Text.RegularExpressions.RegexOptions]::Singleline)
     Mode3TurnCompletionBrakes = [regex]::IsMatch(
         $controlSource, `
-        'if \(angle_error <= 1u\) \{\s*brake\(\);.*?\}\s*else \{\s*Load', `
+        'if \(angle_error <= 1\.0f\) \{\s*brake\(\);.*?\}\s*else \{\s*Load', `
         [System.Text.RegularExpressions.RegexOptions]::Singleline)
     TerminalDriveGuards = `
         ([regex]::Matches($controlSource, `

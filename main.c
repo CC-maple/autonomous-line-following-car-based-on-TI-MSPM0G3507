@@ -39,7 +39,7 @@ int main(void)
     static uint8_t j;
     while(1) 
     {
-            oled_show_number_f1(0, 0, Angle[2]);
+            oled_show_number_f1(0, 0, uart_gyro_heading_degrees());
             // oled_show_number_f1(0, 1, speed_left);
             // oled_show_number_f1(0, 2, speed_right);
             // oled_show_number_f1(0, 3, EncoderA);

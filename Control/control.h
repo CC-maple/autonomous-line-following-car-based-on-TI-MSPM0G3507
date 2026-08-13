@@ -4,7 +4,7 @@
 //#include "ti_msp_dl_config.h"
 #include "stdint.h"
 
-int Position_PID(int reality,int target);
+int Position_PID(float reality,float target);
 int limit_control(int x,int x_min, int x_max);//正值限幅函数
 
 extern int64_t EncoderA, EncoderB, EncoderC, EncoderD;

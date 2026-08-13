@@ -13,7 +13,8 @@ $sourceChecks = [ordered]@{
         'delay_cycles(16000000)')
     QueuedSignalsBrakeAndSkipModeControl = [regex]::IsMatch(
         $controlSource, `
-        'case DL_TIMER_IIDX_ZERO:\s*Sign_LED_Bee_Tick\(\);\s*if \(!signal_state_is_idle\(&signal_state\)\) \{\s*brake\(\);\s*break;\s*\}')
+        'case DL_TIMER_IIDX_ZERO:\s*Sign_LED_Bee_Tick\(\);.*?if \(!signal_state_is_idle\(&signal_state\)\) \{\s*brake\(\);\s*break;\s*\}', `
+        [System.Text.RegularExpressions.RegexOptions]::Singleline)
     SignalGateStillPrecedesModeControl = [regex]::IsMatch(
         $controlSource, `
         'if \(!signal_state_is_idle\(&signal_state\)\).*?break;.*?if\(begin\)', `

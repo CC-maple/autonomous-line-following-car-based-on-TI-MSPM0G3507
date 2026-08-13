@@ -1,0 +1,120 @@
+#include <assert.h>
+#include <math.h>
+#include <stdint.h>
+#include <stdio.h>
+
+#include "UART_Gyro/imu_protocol.h"
+#include "Control/control_math.h"
+
+static void make_frame(uint8_t *frame, int16_t raw_heading)
+{
+    uint8_t index;
+    uint8_t checksum = 0u;
+
+    for (index = 0u; index < IMU_FRAME_LENGTH; ++index) {
+        frame[index] = 0u;
+    }
+    frame[0] = IMU_FRAME_HEADER;
+    frame[1] = IMU_FRAME_ANGLE_TYPE;
+    frame[6] = (uint8_t)raw_heading;
+    frame[7] = (uint8_t)((uint16_t)raw_heading >> 8);
+    for (index = 0u; index < IMU_FRAME_LENGTH - 1u; ++index) {
+        checksum = (uint8_t)(checksum + frame[index]);
+    }
+    frame[IMU_FRAME_LENGTH - 1u] = checksum;
+}
+
+static uint8_t feed_frame(
+    ImuFrameParser *parser, const uint8_t *frame, const uint8_t **accepted)
+{
+    uint8_t index;
+    uint8_t result = IMU_FRAME_NO_RESULT;
+
+    for (index = 0u; index < IMU_FRAME_LENGTH; ++index) {
+        result = imu_frame_parser_push(parser, frame[index], accepted);
+    }
+    return result;
+}
+
+static void test_valid_frame_and_heading(void)
+{
+    ImuFrameParser parser = {0};
+    uint8_t frame[IMU_FRAME_LENGTH];
+    const uint8_t *accepted = NULL;
+
+    make_frame(frame, 16384);
+    assert(feed_frame(&parser, frame, &accepted) == IMU_FRAME_ACCEPTED);
+    assert(accepted == parser.bytes);
+    assert(imu_frame_checksum_is_valid(frame));
+    assert(imu_frame_heading_cdeg(frame) == 9000);
+}
+
+static void test_resynchronizes_after_noise_and_bad_type(void)
+{
+    ImuFrameParser parser = {0};
+    uint8_t frame[IMU_FRAME_LENGTH];
+    const uint8_t *accepted = NULL;
+    uint8_t result;
+
+    make_frame(frame, -16384);
+    result = imu_frame_parser_push(&parser, 0x11u, &accepted);
+    assert(result == IMU_FRAME_NO_RESULT);
+    result = imu_frame_parser_push(&parser, IMU_FRAME_HEADER, &accepted);
+    assert(result == IMU_FRAME_NO_RESULT);
+    result = imu_frame_parser_push(&parser, 0x12u, &accepted);
+    assert(result == IMU_FRAME_NO_RESULT);
+    assert(parser.index == 0u);
+    assert(feed_frame(&parser, frame, &accepted) == IMU_FRAME_ACCEPTED);
+    assert(imu_frame_heading_cdeg(accepted) == -9000);
+}
+
+static void test_checksum_failure_invalidates_frame(void)
+{
+    ImuFrameParser parser = {0};
+    uint8_t frame[IMU_FRAME_LENGTH];
+    const uint8_t *accepted = NULL;
+
+    make_frame(frame, 0);
+    frame[IMU_FRAME_LENGTH - 1u] ^= 0x01u;
+    assert(feed_frame(&parser, frame, &accepted) == IMU_FRAME_CHECKSUM_FAILED);
+    assert(parser.index == 0u);
+    assert(accepted == NULL);
+}
+
+static void test_sample_freshness(void)
+{
+    volatile uint16_t age = IMU_SAMPLE_AGE_INVALID;
+    uint8_t index;
+
+    assert(!imu_sample_is_fresh(&age));
+    imu_sample_publish(&age);
+    assert(imu_sample_is_fresh(&age));
+    for (index = 0u; index < IMU_SAMPLE_MAX_AGE_TICKS; ++index) {
+        imu_sample_tick(&age);
+    }
+    assert(imu_sample_is_fresh(&age));
+    imu_sample_tick(&age);
+    assert(!imu_sample_is_fresh(&age));
+    imu_sample_tick(&age);
+    assert(!imu_sample_is_fresh(&age));
+}
+
+static void test_wrapped_heading_error(void)
+{
+    assert(fabsf(control_heading_error_degrees(179.0f, -179.0f) + 2.0f) < 0.001f);
+    assert(fabsf(control_heading_error_degrees(-179.0f, 179.0f) - 2.0f) < 0.001f);
+    assert(fabsf(control_heading_abs_error_degrees(179.5f, -179.5f) - 1.0f) < 0.001f);
+    assert(control_wrap_degrees(180.0f) == -180.0f);
+    assert(control_wrap_degrees(-181.0f) == 179.0f);
+}
+
+int main(void)
+{
+    test_valid_frame_and_heading();
+    test_resynchronizes_after_noise_and_bad_type();
+    test_checksum_failure_invalidates_frame();
+    test_sample_freshness();
+    test_wrapped_heading_error();
+    puts("IMU heading tests passed");
+    return 0;
+}
