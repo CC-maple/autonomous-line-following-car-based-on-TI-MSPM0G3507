@@ -13,6 +13,7 @@ extern float Position_KP,Position_KI,Position_KD;
 extern int8_t huidu_data[8];
 
 void Control_Init(void);
+void Control_ResetRuntime(void);
 
 extern int16_t speed_left,speed_right;
 

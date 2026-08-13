@@ -5,6 +5,7 @@
 #include "control_math.h"
 #include "sensor_snapshot.h"
 #include "signal_state.h"
+#include "mode_lifecycle.h"
 #include "oled.h"
 // #include <cstdint>
 #include <ti/driverlib/dl_timerg.h>
@@ -83,7 +84,20 @@ uint16_t mode3_1_angle4_change = MODE3_1_Line4;
 #define Integral_bias_MIN 1
 #define SIGNAL_DURATION_TICKS 25u
 
+typedef struct {
+    float bias;
+    float output;
+    float last_bias;
+    float integral;
+} ControlPidState;
+
 static SignalState signal_state;
+static ModeLifecycle mode_lifecycle;
+static ControlPidState position_pid_state;
+static ControlPidState angle_pid_state;
+static ControlPidState mode3_angle_pid_state;
+static ControlPidState path_line_pid_state;
+static ControlPidState mode4_line_pid_state;
 
 void Sign_LED_Bee(void)
 {
@@ -112,8 +126,64 @@ static void Sign_LED_Bee_Tick(void)
   * @param  无
   * @retval 无
   */
+void Control_ResetRuntime(void)
+{
+    uint8_t sensor_index;
+
+    EncoderA = 0;
+    EncoderB = 0;
+    EncoderC = 0;
+    EncoderD = 0;
+    encoder_reset();
+
+    speed_left = speed_const;
+    speed_right = speed_const;
+    angle_speed_left = 0;
+    angle_speed_right = 0;
+    angle_speed_const = 0;
+    Position_target = 0;
+    Angle_target = 0;
+    path_line = 0u;
+    pid_ans = 0;
+    pid_pathline_ans = 0;
+    pid_angle = 0;
+    huidu_read_status = 1;
+    huidu_data_sum = 0;
+    mode4_huidu_read_status = 1;
+    mode4_huidu_data_sum = 0;
+    for (sensor_index = 0u; sensor_index < 8u; ++sensor_index) {
+        huidu_data[sensor_index] = 0;
+        mode4_huidu_data[sensor_index] = 0;
+    }
+
+    mode2_1 = 0u;
+    mode2_2 = 0u;
+    mode2_bee = 0u;
+    mode3_1 = 0u;
+    mode3_2 = 0u;
+    mode3_1_angle4_change = MODE3_1_Line4;
+
+    mode4_v_L = 0;
+    mode4_v_R = 0;
+    mode4_pwm_ans = 0;
+    mode4_flag = 0u;
+    mode4_color_flag = 0u;
+    mode4_color_nums = 0u;
+    mode4_angle1_1 = 0.0f;
+    mode4_angle_flag = 0u;
+    mode4_circle_nums = 0u;
+
+    position_pid_state = (ControlPidState){0};
+    angle_pid_state = (ControlPidState){0};
+    mode3_angle_pid_state = (ControlPidState){0};
+    path_line_pid_state = (ControlPidState){0};
+    mode4_line_pid_state = (ControlPidState){0};
+}
+
 void Control_Init(void)
 {
+    mode_lifecycle_init(&mode_lifecycle);
+    Control_ResetRuntime();
     signal_state_init(&signal_state);
     DL_GPIO_setPins(
         GPIO_Sign_PORT, GPIO_Sign_PIN_LED_PIN | GPIO_Sign_PIN_Bee_PIN);
@@ -122,75 +192,75 @@ void Control_Init(void)
 }
 
 int Position_PID(int reality,int target)//走直线的PID函数，勿动
-{ 	
-    static float Bias,Pwm,Last_Bias,Integral_bias=0;
-    
-    Bias=reality-target;                            /* 计算偏差 */
-    Integral_bias+=Bias;	                        /* 偏差累积 */
-    
-    if(Integral_bias> Integral_bias_MAX) Integral_bias = Integral_bias_MAX;   /* 积分限幅 */
-    if(Integral_bias<-Integral_bias_MAX) Integral_bias = -Integral_bias_MIN;
-    
-    Pwm = (Position_KP*Bias)                        /* 比例环节 */
-         +(Position_KI*Integral_bias)               /* 积分环节 */
-         +(Position_KD*(Bias-Last_Bias));           /* 微分环节 */
-    
-    Last_Bias=Bias;                                 /* 保存上次偏差 */
-    return Pwm;                                     /* 输出结果 */
+{
+    ControlPidState *state = &position_pid_state;
+
+    state->bias = reality-target;                            /* 计算偏差 */
+    state->integral += state->bias;	                        /* 偏差累积 */
+
+    if(state->integral > Integral_bias_MAX) state->integral = Integral_bias_MAX;
+    if(state->integral < -Integral_bias_MAX) state->integral = -Integral_bias_MIN;
+
+    state->output = (Position_KP * state->bias)
+         +(Position_KI * state->integral)
+         +(Position_KD * (state->bias - state->last_bias));
+
+    state->last_bias = state->bias;
+    return state->output;
 }
 
 int Angle_PID(int reality,int target)//转一定角度的PID函数，有待优化
-{ 	
-    static float Bias_Angle,Pwm,Last_Bias_Angle,Integral_bias_Angle=0;
-    
-    Bias_Angle = reality-target;                            /* 计算偏差 */
-    Integral_bias_Angle += Bias_Angle;	                        /* 偏差累积 */
-    
-    if(Integral_bias_Angle> Integral_bias_MAX) Integral_bias_Angle = Integral_bias_MAX;   /* 积分限幅 */
-    if(Integral_bias_Angle<-Integral_bias_MAX) Integral_bias_Angle = -Integral_bias_MIN;
-    
-    Pwm = (Angle_KP*Bias_Angle)                        /* 比例环节 */
-         +(Angle_KI*Integral_bias_Angle)               /* 积分环节 */
-         +(Angle_KD*(Bias_Angle-Last_Bias_Angle));           /* 微分环节 */
-    
-    Last_Bias_Angle=Bias_Angle;                                 /* 保存上次偏差 */
-    return Pwm;                                     /* 输出结果 */
+{
+    ControlPidState *state = &angle_pid_state;
+
+    state->bias = reality-target;
+    state->integral += state->bias;
+
+    if(state->integral > Integral_bias_MAX) state->integral = Integral_bias_MAX;
+    if(state->integral < -Integral_bias_MAX) state->integral = -Integral_bias_MIN;
+
+    state->output = (Angle_KP * state->bias)
+         +(Angle_KI * state->integral)
+         +(Angle_KD * (state->bias - state->last_bias));
+
+    state->last_bias = state->bias;
+    return state->output;
 }
 
 int mode3_Angle_PID(int reality,int target)//转一定角度的PID函数，有待优化
-{ 	
-    static float Bias_Angle,Pwm,Last_Bias_Angle,Integral_bias_Angle=0;
-    
-    Bias_Angle = reality-target;                            /* 计算偏差 */
-    Integral_bias_Angle += Bias_Angle;	                        /* 偏差累积 */
-    
-    if(Integral_bias_Angle> Integral_bias_MAX) Integral_bias_Angle = Integral_bias_MAX;   /* 积分限幅 */
-    if(Integral_bias_Angle<-Integral_bias_MAX) Integral_bias_Angle = -Integral_bias_MIN;
-    
-    Pwm = (mode3_Angle_KP*Bias_Angle)                        /* 比例环节 */
-         +(mode3_Angle_KI*Integral_bias_Angle)               /* 积分环节 */
-         +(mode3_Angle_KD*(Bias_Angle-Last_Bias_Angle));           /* 微分环节 */
-    
-    Last_Bias_Angle=Bias_Angle;                                 /* 保存上次偏差 */
-    return Pwm;                                     /* 输出结果 */
+{
+    ControlPidState *state = &mode3_angle_pid_state;
+
+    state->bias = reality-target;
+    state->integral += state->bias;
+
+    if(state->integral > Integral_bias_MAX) state->integral = Integral_bias_MAX;
+    if(state->integral < -Integral_bias_MAX) state->integral = -Integral_bias_MIN;
+
+    state->output = (mode3_Angle_KP * state->bias)
+         +(mode3_Angle_KI * state->integral)
+         +(mode3_Angle_KD * (state->bias - state->last_bias));
+
+    state->last_bias = state->bias;
+    return state->output;
 }
 
 int PathLine_PID(int reality,int target)//走直线的PID函数，勿动
-{ 	
-    static float Bias_PathLine,Pwm,Last_Bias_PathLine,Integral_bias_PathLine=0;
-    
-    Bias_PathLine=target-reality;                            /* 计算偏差 目标-实际*/
-    Integral_bias_PathLine+=Bias_PathLine;	                        /* 偏差累积 */
-    
-    if(Integral_bias_PathLine> Integral_bias_MAX) Integral_bias_PathLine = Integral_bias_MAX;   /* 积分限幅 */
-    if(Integral_bias_PathLine<-Integral_bias_MAX) Integral_bias_PathLine = -Integral_bias_MIN;
+{
+    ControlPidState *state = &path_line_pid_state;
 
-    Pwm = (PathLine_KP*Bias_PathLine)                        /* 比例环节 */
-         +(PathLine_KI*Integral_bias_PathLine)               /* 积分环节 */
-         +(PathLine_KD*(Bias_PathLine-Last_Bias_PathLine));           /* 微分环节 */
-    
-    Last_Bias_PathLine=Bias_PathLine;                                 /* 保存上次偏差 */
-    return Pwm;                                     /* 输出结果 */
+    state->bias = target-reality;                            /* 计算偏差 目标-实际*/
+    state->integral += state->bias;
+
+    if(state->integral > Integral_bias_MAX) state->integral = Integral_bias_MAX;
+    if(state->integral < -Integral_bias_MAX) state->integral = -Integral_bias_MIN;
+
+    state->output = (PathLine_KP * state->bias)
+         +(PathLine_KI * state->integral)
+         +(PathLine_KD * (state->bias - state->last_bias));
+
+    state->last_bias = state->bias;
+    return state->output;
 }
 
 
@@ -343,12 +413,28 @@ void search_line()
 void TIMG0_IRQHandler(void)
 {
     int PWM_out;int i;
+    uint8_t lifecycle_event;
     switch(DL_TimerG_getPendingInterrupt(TIMG0))
 	{
 		case DL_TIMER_IIDX_ZERO:
         Sign_LED_Bee_Tick();
         if (!signal_state_is_idle(&signal_state)) {
             brake();
+            break;
+        }
+        lifecycle_event = mode_lifecycle_step(&mode_lifecycle, mode, begin);
+        if (lifecycle_event == MODE_LIFECYCLE_ENTER) {
+            Control_ResetRuntime();
+        }
+        else if (lifecycle_event == MODE_LIFECYCLE_EXIT ||
+            lifecycle_event == MODE_LIFECYCLE_ABORT ||
+            lifecycle_event == MODE_LIFECYCLE_INVALID) {
+            brake();
+            Control_ResetRuntime();
+            begin = 0u;
+            if (lifecycle_event == MODE_LIFECYCLE_INVALID) {
+                mode = 0u;
+            }
             break;
         }
         if(begin)
@@ -1451,22 +1537,14 @@ void TIMG0_IRQHandler(void)
 
 int Mode4_line_PID(float reality_angle, float target_angle)
 {
-    //预计采用PD算法，不用积分项
-    static float Error_Angle, Last_Error, Integral_error, PWM_line=0;
+    ControlPidState *state = &mode4_line_pid_state;
 
-    Error_Angle = reality_angle-target_angle;//计算偏差
-    
-    // if (fabsf(Error_Angle)<=0.5) {
-    //     return 0;
-    // }
-    // Integral_error+=Error_Angle;//累计偏差
-    // else {
-        PWM_line = (Mode4_line_Kp*Error_Angle)    //比例环节
-                + (Mode4_line_Kp*(Error_Angle-Last_Error)); //微分环节
+    state->bias = reality_angle-target_angle;//计算偏差
+    state->output = (Mode4_line_Kp * state->bias)
+            + (Mode4_line_Kp * (state->bias - state->last_bias));
 
-        Last_Error=Error_Angle;
-        return 10*PWM_line;//结果乘10倍再保存
-    // }
+    state->last_bias = state->bias;
+    return 10 * state->output;//结果乘10倍再保存
 }
 
 

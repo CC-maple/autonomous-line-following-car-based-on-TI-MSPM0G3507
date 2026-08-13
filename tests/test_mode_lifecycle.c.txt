@@ -1,0 +1,55 @@
+#include <assert.h>
+#include <stdio.h>
+
+#include "Control/mode_lifecycle.h"
+
+static void test_start_continue_and_exit(void)
+{
+    ModeLifecycle lifecycle;
+
+    mode_lifecycle_init(&lifecycle);
+    assert(mode_lifecycle_step(&lifecycle, 0u, 0u) == MODE_LIFECYCLE_IDLE);
+    assert(mode_lifecycle_step(&lifecycle, 0u, 1u) == MODE_LIFECYCLE_INVALID);
+    assert(lifecycle.active_mode == 0u);
+    assert(mode_lifecycle_step(&lifecycle, 3u, 1u) == MODE_LIFECYCLE_ENTER);
+    assert(lifecycle.active_mode == 3u);
+    assert(mode_lifecycle_step(&lifecycle, 3u, 1u) == MODE_LIFECYCLE_CONTINUE);
+    assert(mode_lifecycle_step(&lifecycle, 0u, 1u) == MODE_LIFECYCLE_EXIT);
+    assert(lifecycle.active_mode == 0u);
+    assert(mode_lifecycle_step(&lifecycle, 0u, 0u) == MODE_LIFECYCLE_IDLE);
+}
+
+static void test_abort_requires_new_start(void)
+{
+    ModeLifecycle lifecycle;
+
+    mode_lifecycle_init(&lifecycle);
+    assert(mode_lifecycle_step(&lifecycle, 2u, 1u) == MODE_LIFECYCLE_ENTER);
+    assert(mode_lifecycle_step(&lifecycle, 4u, 1u) == MODE_LIFECYCLE_ABORT);
+    assert(lifecycle.active_mode == 0u);
+    assert(mode_lifecycle_step(&lifecycle, 4u, 0u) == MODE_LIFECYCLE_IDLE);
+    assert(mode_lifecycle_step(&lifecycle, 4u, 1u) == MODE_LIFECYCLE_ENTER);
+    assert(lifecycle.active_mode == 4u);
+}
+
+static void test_invalid_and_idle_selection(void)
+{
+    ModeLifecycle lifecycle;
+
+    mode_lifecycle_init(&lifecycle);
+    assert(mode_lifecycle_step(&lifecycle, 8u, 1u) == MODE_LIFECYCLE_INVALID);
+    assert(lifecycle.active_mode == 0u);
+    assert(mode_lifecycle_step(&lifecycle, 7u, 0u) == MODE_LIFECYCLE_IDLE);
+    assert(mode_lifecycle_step(&lifecycle, 7u, 1u) == MODE_LIFECYCLE_ENTER);
+    assert(mode_lifecycle_step(&lifecycle, 8u, 1u) == MODE_LIFECYCLE_INVALID);
+    assert(lifecycle.active_mode == 0u);
+}
+
+int main(void)
+{
+    test_start_continue_and_exit();
+    test_abort_requires_new_start();
+    test_invalid_and_idle_selection();
+    puts("mode lifecycle tests passed");
+    return 0;
+}
