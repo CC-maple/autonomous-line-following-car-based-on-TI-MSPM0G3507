@@ -101,6 +101,10 @@ static ControlPidState path_line_pid_state;
 static ControlPidState mode4_line_pid_state;
 static ControlSchedulerOutput control_scheduler_output;
 
+#define Load(motor1, motor2, motor3, motor4) \
+    control_scheduler_load((motor1), (motor2), (motor3), (motor4))
+#define brake() control_scheduler_brake()
+
 static void control_scheduler_load(
     int motor1, int motor2, int motor3, int motor4)
 {
@@ -318,10 +322,6 @@ void huidu_updata(void)
     huidu_data_sum = sensor_snapshot_decode(
         (uint32_t)huidu_read_status, pin_masks, &huidu_data[1], 6u);
 }
-
-#define Load(motor1, motor2, motor3, motor4) \
-    control_scheduler_load((motor1), (motor2), (motor3), (motor4))
-#define brake() control_scheduler_brake()
 
 void mode3_go_line(uint64_t mode3_target_line, float mode3_line_angle){
     uint64_t encoder_step;
