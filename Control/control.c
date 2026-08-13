@@ -3,6 +3,7 @@
 #include  "encoder.h"
 #include "motor.h"
 #include "control_math.h"
+#include "control_scheduler.h"
 #include "sensor_snapshot.h"
 #include "signal_state.h"
 #include "mode_lifecycle.h"
@@ -98,6 +99,30 @@ static ControlPidState angle_pid_state;
 static ControlPidState mode3_angle_pid_state;
 static ControlPidState path_line_pid_state;
 static ControlPidState mode4_line_pid_state;
+static ControlSchedulerOutput control_scheduler_output;
+
+static void control_scheduler_load(
+    int motor1, int motor2, int motor3, int motor4)
+{
+    control_scheduler_request_load(
+        &control_scheduler_output, motor1, motor2, motor3, motor4);
+}
+
+static void control_scheduler_brake(void)
+{
+    control_scheduler_request_brake(&control_scheduler_output);
+}
+
+static void control_scheduler_commit_output(void)
+{
+    if (control_scheduler_should_brake(&control_scheduler_output)) {
+        (brake)();
+    }
+    else {
+        (Load)(control_scheduler_output.motor1, control_scheduler_output.motor2,
+            control_scheduler_output.motor3, control_scheduler_output.motor4);
+    }
+}
 
 static inline float control_heading(void)
 {
@@ -294,6 +319,10 @@ void huidu_updata(void)
         (uint32_t)huidu_read_status, pin_masks, &huidu_data[1], 6u);
 }
 
+#define Load(motor1, motor2, motor3, motor4) \
+    control_scheduler_load((motor1), (motor2), (motor3), (motor4))
+#define brake() control_scheduler_brake()
+
 void mode3_go_line(uint64_t mode3_target_line, float mode3_line_angle){
     uint64_t encoder_step;
 
@@ -407,15 +436,16 @@ void search_line()
   */
 void TIMG0_IRQHandler(void)
 {
-    int PWM_out;int i;
     uint8_t lifecycle_event;
     switch(DL_TimerG_getPendingInterrupt(TIMG0))
 	{
 		case DL_TIMER_IIDX_ZERO:
+        control_scheduler_init(&control_scheduler_output);
         Sign_LED_Bee_Tick();
         uart_gyro_tick();
         if (!signal_state_is_idle(&signal_state)) {
             brake();
+            control_scheduler_commit_output();
             break;
         }
         lifecycle_event = mode_lifecycle_step(&mode_lifecycle, mode, begin);
@@ -431,10 +461,12 @@ void TIMG0_IRQHandler(void)
             if (lifecycle_event == MODE_LIFECYCLE_INVALID) {
                 mode = 0u;
             }
+            control_scheduler_commit_output();
             break;
         }
         if (begin && !uart_gyro_is_fresh()) {
             brake();
+            control_scheduler_commit_output();
             break;
         }
         if(begin)
@@ -934,7 +966,7 @@ void TIMG0_IRQHandler(void)
                                 mode4_v_L=2*limit_control(mode4_v_L, -20, 20);
                                 mode4_v_R=2*limit_control(mode4_v_R, -20, 20); //限幅可改
                                 if (control_heading_abs_error_degrees(
-                                    control_heading(), mode4_angle1_1) <= 0.5f) {
+                                    control_heading(), mode4_angle1_1 + 4.0f) <= 0.5f) {
                                     brake();
                                     Sign_LED_Bee();
                                     mode4_flag=4;
@@ -1528,6 +1560,7 @@ void TIMG0_IRQHandler(void)
                 mode=0;
             }
         }
+        control_scheduler_commit_output();
 			break;
 
 			default:
