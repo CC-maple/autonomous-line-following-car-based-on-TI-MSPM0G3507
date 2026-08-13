@@ -1,0 +1,91 @@
+#include <assert.h>
+#include <stdint.h>
+#include <stdio.h>
+
+#include "Control/signal_state.h"
+
+static void test_initial_state(void)
+{
+    SignalState state;
+
+    signal_state_init(&state);
+    assert(signal_state_is_idle(&state));
+    assert(!signal_state_is_active(&state));
+    assert(!signal_state_tick(&state));
+    assert(!signal_state_request(&state, 0u));
+}
+
+static void test_duration_and_queued_request(void)
+{
+    SignalState state;
+    uint16_t tick;
+
+    signal_state_init(&state);
+    assert(signal_state_request(&state, 25u));
+    assert(signal_state_is_active(&state));
+    assert(!signal_state_request(&state, 25u));
+    assert(!signal_state_is_idle(&state));
+
+    for (tick = 0u; tick < 24u; ++tick) {
+        assert(signal_state_tick(&state) == SIGNAL_TICK_NONE);
+        assert(signal_state_is_active(&state));
+    }
+
+    assert(signal_state_tick(&state) == SIGNAL_TICK_FINISHED);
+    assert(!signal_state_is_active(&state));
+    assert(!signal_state_is_idle(&state));
+    assert(signal_state_tick(&state) == SIGNAL_TICK_STARTED);
+    assert(signal_state_is_active(&state));
+
+    for (tick = 0u; tick < 24u; ++tick) {
+        assert(signal_state_tick(&state) == SIGNAL_TICK_NONE);
+    }
+    assert(signal_state_tick(&state) == SIGNAL_TICK_FINISHED);
+    assert(!signal_state_is_active(&state));
+    assert(!signal_state_is_idle(&state));
+    assert(signal_state_tick(&state) == SIGNAL_TICK_NONE);
+    assert(signal_state_is_idle(&state));
+}
+
+static void test_pending_queue_saturates(void)
+{
+    SignalState state;
+    uint16_t request;
+
+    signal_state_init(&state);
+    assert(signal_state_request(&state, 25u));
+    for (request = 0u; request < 300u; ++request) {
+        assert(!signal_state_request(&state, 25u));
+    }
+    assert(state.pending_requests == UINT8_MAX);
+}
+
+static void test_retrigger_after_completion(void)
+{
+    SignalState state;
+
+    signal_state_init(&state);
+    assert(signal_state_request(&state, 1u));
+    assert(signal_state_tick(&state) == SIGNAL_TICK_FINISHED);
+    assert(!signal_state_is_active(&state));
+
+    assert(!signal_state_request(&state, 1u));
+    assert(!signal_state_is_idle(&state));
+    assert(signal_state_tick(&state) == SIGNAL_TICK_STARTED);
+    assert(signal_state_is_active(&state));
+    assert(signal_state_tick(&state) == SIGNAL_TICK_FINISHED);
+
+    assert(signal_state_tick(&state) == SIGNAL_TICK_NONE);
+    assert(signal_state_request(&state, 1u));
+    assert(signal_state_tick(&state) == SIGNAL_TICK_FINISHED);
+}
+
+int main(void)
+{
+    test_initial_state();
+    test_duration_and_queued_request();
+    test_pending_queue_saturates();
+    test_retrigger_after_completion();
+    puts("nonblocking signal tests passed");
+    return 0;
+}

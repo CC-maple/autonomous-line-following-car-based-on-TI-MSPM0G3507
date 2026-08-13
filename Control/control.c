@@ -3,6 +3,7 @@
 #include  "encoder.h"
 #include "motor.h"
 #include "control_math.h"
+#include "signal_state.h"
 #include "oled.h"
 // #include <cstdint>
 #include <ti/driverlib/dl_timerg.h>
@@ -80,11 +81,30 @@ uint16_t mode3_1_angle4_change = MODE3_1_Line4;
 uint8_t i;
 #define Integral_bias_MAX 5
 #define Integral_bias_MIN 1
+#define SIGNAL_DURATION_TICKS 25u
 
-void Sign_LED_Bee(){
-    DL_GPIO_clearPins(GPIO_Sign_PORT,GPIO_Sign_PIN_LED_PIN | GPIO_Sign_PIN_Bee_PIN);
-    delay_cycles(16000000);
-    DL_GPIO_setPins(GPIO_Sign_PORT,GPIO_Sign_PIN_LED_PIN | GPIO_Sign_PIN_Bee_PIN);
+static SignalState signal_state;
+
+void Sign_LED_Bee(void)
+{
+    if (signal_state_request(&signal_state, SIGNAL_DURATION_TICKS)) {
+        DL_GPIO_clearPins(
+            GPIO_Sign_PORT, GPIO_Sign_PIN_LED_PIN | GPIO_Sign_PIN_Bee_PIN);
+    }
+}
+
+static void Sign_LED_Bee_Tick(void)
+{
+    uint8_t tick_result = signal_state_tick(&signal_state);
+
+    if (tick_result == SIGNAL_TICK_FINISHED) {
+        DL_GPIO_setPins(
+            GPIO_Sign_PORT, GPIO_Sign_PIN_LED_PIN | GPIO_Sign_PIN_Bee_PIN);
+    }
+    else if (tick_result == SIGNAL_TICK_STARTED) {
+        DL_GPIO_clearPins(
+            GPIO_Sign_PORT, GPIO_Sign_PIN_LED_PIN | GPIO_Sign_PIN_Bee_PIN);
+    }
 }
 
 /**
@@ -94,6 +114,9 @@ void Sign_LED_Bee(){
   */
 void Control_Init(void)
 {
+    signal_state_init(&signal_state);
+    DL_GPIO_setPins(
+        GPIO_Sign_PORT, GPIO_Sign_PIN_LED_PIN | GPIO_Sign_PIN_Bee_PIN);
     NVIC_EnableIRQ(TIMG0_INT_IRQn);//使能中断
     DL_TimerG_startCounter(TIMG0);
 }
@@ -362,6 +385,11 @@ void TIMG0_IRQHandler(void)
     switch(DL_TimerG_getPendingInterrupt(TIMG0))
 	{
 		case DL_TIMER_IIDX_ZERO:
+        Sign_LED_Bee_Tick();
+        if (!signal_state_is_idle(&signal_state)) {
+            brake();
+            break;
+        }
         if(begin)
 		{        
 			// NVIC_DianableIRQ(GPIOB_INT_IRQn);//包含按键和编码器读取的外部中断,
