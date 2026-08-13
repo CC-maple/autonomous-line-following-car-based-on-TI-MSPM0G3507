@@ -1,0 +1,50 @@
+#include <assert.h>
+#include <limits.h>
+#include <stdint.h>
+#include <stdio.h>
+
+#include "Control/control_math.h"
+
+static void test_absolute_values(void)
+{
+    assert(control_abs_i64(0) == UINT64_C(0));
+    assert(control_abs_i64(1) == UINT64_C(1));
+    assert(control_abs_i64(-1) == UINT64_C(1));
+    assert(control_abs_i64(INT64_MAX) == (uint64_t)INT64_MAX);
+    assert(control_abs_i64(INT64_MIN) == (UINT64_C(1) << 63));
+    assert(control_abs_int_saturating(INT_MIN) == INT_MAX);
+}
+
+static void test_absolute_differences(void)
+{
+    assert(control_abs_diff_i64(5, -3) == UINT64_C(8));
+    assert(control_abs_diff_i64(-3, 5) == UINT64_C(8));
+    assert(control_abs_diff_i64(INT64_MIN, INT64_MAX) == UINT64_MAX);
+    assert(control_abs_diff_u64(175, 175) == UINT64_C(0));
+    assert(control_abs_diff_u64(control_abs_i64(-175), 175) == UINT64_C(0));
+}
+
+static void test_saturating_addition(void)
+{
+    assert(control_add_u64_saturating(10, 20) == UINT64_C(30));
+    assert(control_add_u64_saturating(UINT64_MAX - 5, 5) == UINT64_MAX);
+    assert(control_add_u64_saturating(UINT64_MAX - 5, 6) == UINT64_MAX);
+}
+
+static void test_distance_completion(void)
+{
+    assert(!control_distance_reached(1984, 2000, 15));
+    assert(control_distance_reached(1985, 2000, 15));
+    assert(control_distance_reached(2000, 2000, 15));
+    assert(control_distance_reached(2040, 2000, 15));
+}
+
+int main(void)
+{
+    test_absolute_values();
+    test_absolute_differences();
+    test_saturating_addition();
+    test_distance_completion();
+    puts("absolute-and-distance tests passed");
+    return 0;
+}

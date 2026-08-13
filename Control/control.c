@@ -2,6 +2,7 @@
 // #include  "math.h"
 #include  "encoder.h"
 #include "motor.h"
+#include "control_math.h"
 #include "oled.h"
 // #include <cstdint>
 #include <ti/driverlib/dl_timerg.h>
@@ -29,12 +30,11 @@ uint8_t mode3_1=0, mode3_2=0;
 // uint8_t mode4_num=0;//
 
 int Position_target=0, Angle_target=0;
-int path_line=0;
+uint64_t path_line=0;
 
 int pid_ans=0;
 int pid_pathline_ans=0;
 int pid_angle=0;
-int test;
 int32_t huidu_read_status=1;
 int8_t huidu_data[8];
 int8_t huidu_data_sum;
@@ -63,6 +63,7 @@ float mode4_angle_change=-145;//按键更改第一圈第二次斜线角度变量
 uint8_t mode4_circle_nums=0;
 //-------------------------------------------------------------------------//
 
+#define MODE3_DISTANCE_TOLERANCE 15u
 #define MODE3_1_Line1 2000
 #define MODE3_1_Angle1 -90
 #define MODE3_1_Line2 3630//+30+30 //原3500
@@ -233,9 +234,13 @@ void huidu_updata()
     
 }
 
-void  mode3_go_line(int mode3_target_line, float mode3_line_angle){
+void mode3_go_line(uint64_t mode3_target_line, float mode3_line_angle){
+    uint64_t encoder_step;
+
     encoder_read(&EncoderA,&EncoderB, &EncoderC,&EncoderD);//更新编码器值
-    path_line = path_line+ my_abs(EncoderA)+ my_abs(EncoderB);
+    encoder_step = control_add_u64_saturating(
+        control_abs_i64(EncoderA), control_abs_i64(EncoderB));
+    path_line = control_add_u64_saturating(path_line, encoder_step);
     pid_ans=Position_PID(Angle[2], mode3_line_angle);
     speed_left+=pid_ans;
     speed_right-=pid_ans;
@@ -243,7 +248,7 @@ void  mode3_go_line(int mode3_target_line, float mode3_line_angle){
     speed_left=limit_control(speed_left, 10, 30);
     speed_right=limit_control(speed_right, 10, 30);
     
-    if ( my_abs(mode3_target_line-path_line) <= 15 ) {
+    if (control_distance_reached(path_line, mode3_target_line, MODE3_DISTANCE_TOLERANCE)) {
         path_line=0;
         if (mode3_target_line==MODE3_1_Line1) {
             brake();
@@ -299,7 +304,7 @@ void mode3_only_go_line(float mode3_line_angle){
 
 void mode3_turn_angle(float mode3_target_angle)
 {
-    static float test;
+    uint64_t angle_error;
     // pid_angle=mode3_Angle_PID(Angle[2], mode3_target_angle);//!!!!!!!!!!
     ///-----------------------------------------------------------------!!!!!!!!!!!!!!-------------------------
     if (mode3_1==7) {
@@ -318,9 +323,9 @@ void mode3_turn_angle(float mode3_target_angle)
     speed_left = limit_control(speed_left, -30, 30);
     speed_right = limit_control(speed_right, -30, 30);
     Load(speed_left, speed_right, speed_left,speed_right);
-    test=get_abs(  (int)(Angle[2])  -mode3_target_angle );
+    angle_error = control_abs_diff_i64((int64_t)Angle[2], (int64_t)mode3_target_angle);
 
-    if ( test <= 1) {
+    if (angle_error <= 1u) {
         if (mode3_target_angle == MODE3_1_Angle1) {//根据模式不同选择跳转不同的模式
             mode3_1 = 2;
         }
@@ -462,7 +467,8 @@ void TIMG0_IRQHandler(void)
                             speed_left = limit_control(speed_left, -30, 30);
                             speed_right = limit_control(speed_right, -30, 30);
                             Load(speed_left, speed_right, speed_left,speed_right);
-                            if (  (my_abs(Angle[2]+179)<2) || (my_abs(Angle[2]-179)<2)  ) {
+                            if (  (control_abs_i64((int64_t)(Angle[2] + 179)) < 2u) ||
+                                 (control_abs_i64((int64_t)(Angle[2] - 179)) < 2u)  ) {
                                 // brake();
                                 // //-----------//
                                 // Sign_LED_Bee();
@@ -652,7 +658,7 @@ void TIMG0_IRQHandler(void)
                             speed_left = limit_control(speed_left, -30, 30);
                             speed_right = limit_control(speed_right, -30, 30);
                             Load(speed_left, speed_right, speed_left,speed_right);
-                            if (my_abs( my_abs(Angle[2]) - MODE3_1_Angle3 )<1) {
+                            if (control_abs_diff_u64(control_abs_i64((int64_t)Angle[2]), MODE3_1_Angle3) < 1u) {
 
                                 brake();
                                 //-----------//
