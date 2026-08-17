@@ -1,5 +1,6 @@
 //#include "ti_msp_dl_config.h"
 #include "motor.h"
+#include <limits.h>
 #include <ti/driverlib/dl_timerg.h>
 
 int PWM_MAX =90, PWM_MIN = -90;
@@ -44,18 +45,15 @@ void Limit(int *motorA, int *motorB, int *motorC, int *motorD)
 
 int my_abs(int p)
 {
-	int q;
-	q = p>0 ? p : (-q);
-	return q;
+    if (p == INT_MIN) {
+        return INT_MAX;
+    }
+    return p < 0 ? -p : p;
 }
 
 int get_abs(int x)
 {
-    if (x<0) {
-        x=-x;
-    }
-    return x;
-
+    return my_abs(x);
 }
 
 void Load(int motor1, int motor2 , int motor3 , int motor4)
@@ -115,6 +113,11 @@ DL_TimerG_setCaptureCompareValue(TIMA0,motor4,DL_TIMER_CC_3_INDEX);
 //刹车函数
 void brake(void)
 {
+        DL_TimerG_setCaptureCompareValue(TIMA0, 0, DL_TIMER_CC_0_INDEX);
+        DL_TimerG_setCaptureCompareValue(TIMA0, 0, DL_TIMER_CC_1_INDEX);
+        DL_TimerG_setCaptureCompareValue(TIMA0, 0, DL_TIMER_CC_2_INDEX);
+        DL_TimerG_setCaptureCompareValue(TIMA0, 0, DL_TIMER_CC_3_INDEX);
+
         AIN1_OUT(1);
         AIN2_OUT(1);
 

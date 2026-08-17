@@ -101,6 +101,14 @@ void GROUP1_IRQHandler(void)
 }
 
 
+void encoder_reset(void)
+{
+    enc_cnt[0] = 0;
+    enc_cnt[1] = 0;
+    enc_cnt[2] = 0;
+    enc_cnt[3] = 0;
+}
+
 void encoder_read(int64_t *a,int64_t *b, int64_t *c, int64_t *d)
 {	
 	//暂存
@@ -109,11 +117,7 @@ void encoder_read(int64_t *a,int64_t *b, int64_t *c, int64_t *d)
     *c = enc_cnt[2];
     *d = enc_cnt[3];
 	
-	//清零
-	enc_cnt[0] = 0;
-	enc_cnt[1] = 0;
-    enc_cnt[2] = 0;
-    enc_cnt[3] = 0;
+	encoder_reset();
 }
 
 

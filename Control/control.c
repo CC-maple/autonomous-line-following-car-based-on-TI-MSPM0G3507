@@ -2,6 +2,11 @@
 // #include  "math.h"
 #include  "encoder.h"
 #include "motor.h"
+#include "control_math.h"
+#include "control_scheduler.h"
+#include "sensor_snapshot.h"
+#include "signal_state.h"
+#include "mode_lifecycle.h"
 #include "oled.h"
 // #include <cstdint>
 #include <ti/driverlib/dl_timerg.h>
@@ -29,12 +34,11 @@ uint8_t mode3_1=0, mode3_2=0;
 // uint8_t mode4_num=0;//
 
 int Position_target=0, Angle_target=0;
-int path_line=0;
+uint64_t path_line=0;
 
 int pid_ans=0;
 int pid_pathline_ans=0;
 int pid_angle=0;
-int test;
 int32_t huidu_read_status=1;
 int8_t huidu_data[8];
 int8_t huidu_data_sum;
@@ -51,7 +55,7 @@ uint8_t mode4_flag=0; //模式4的细分模式
 uint8_t mode4_color_flag;//color=0 多次识别到黑线，否则：color=1(处于白色区)
 uint8_t mode4_color_nums;//颜色记数，防止误检测，成功记数后记得清零
 
-void mode4_huidu_updata();
+void mode4_huidu_updata(void);
 int32_t mode4_huidu_read_status=1;
 int8_t mode4_huidu_data[8];
 int8_t mode4_huidu_data_sum;
@@ -63,6 +67,7 @@ float mode4_angle_change=-145;//按键更改第一圈第二次斜线角度变量
 uint8_t mode4_circle_nums=0;
 //-------------------------------------------------------------------------//
 
+#define MODE3_DISTANCE_TOLERANCE 15u
 #define MODE3_1_Line1 2000
 #define MODE3_1_Angle1 -90
 #define MODE3_1_Line2 3630//+30+30 //原3500
@@ -76,14 +81,78 @@ uint8_t mode4_circle_nums=0;
 uint16_t mode3_1_angle4_change = MODE3_1_Line4;
 #define MODE3_1_Angle5 -179
 
-uint8_t i;
 #define Integral_bias_MAX 5
 #define Integral_bias_MIN 1
+#define SIGNAL_DURATION_TICKS 25u
 
-void Sign_LED_Bee(){
-    DL_GPIO_clearPins(GPIO_Sign_PORT,GPIO_Sign_PIN_LED_PIN | GPIO_Sign_PIN_Bee_PIN);
-    delay_cycles(16000000);
-    DL_GPIO_setPins(GPIO_Sign_PORT,GPIO_Sign_PIN_LED_PIN | GPIO_Sign_PIN_Bee_PIN);
+typedef struct {
+    float bias;
+    float output;
+    float last_bias;
+    float integral;
+} ControlPidState;
+
+static SignalState signal_state;
+static ModeLifecycle mode_lifecycle;
+static ControlPidState position_pid_state;
+static ControlPidState angle_pid_state;
+static ControlPidState mode3_angle_pid_state;
+static ControlPidState path_line_pid_state;
+static ControlPidState mode4_line_pid_state;
+static ControlSchedulerOutput control_scheduler_output;
+
+#define Load(motor1, motor2, motor3, motor4) \
+    control_scheduler_load((motor1), (motor2), (motor3), (motor4))
+#define brake() control_scheduler_brake()
+
+static void control_scheduler_load(
+    int motor1, int motor2, int motor3, int motor4)
+{
+    control_scheduler_request_load(
+        &control_scheduler_output, motor1, motor2, motor3, motor4);
+}
+
+static void control_scheduler_brake(void)
+{
+    control_scheduler_request_brake(&control_scheduler_output);
+}
+
+static void control_scheduler_commit_output(void)
+{
+    if (control_scheduler_should_brake(&control_scheduler_output)) {
+        (brake)();
+    }
+    else {
+        (Load)(control_scheduler_output.motor1, control_scheduler_output.motor2,
+            control_scheduler_output.motor3, control_scheduler_output.motor4);
+    }
+}
+
+static inline float control_heading(void)
+{
+    return uart_gyro_heading_degrees();
+}
+
+void Sign_LED_Bee(void)
+{
+    if (signal_state_request(&signal_state, SIGNAL_DURATION_TICKS)) {
+        DL_GPIO_clearPins(
+            GPIO_Sign_PORT, GPIO_Sign_PIN_LED_PIN | GPIO_Sign_PIN_Bee_PIN);
+    }
+}
+
+static void Sign_LED_Bee_Tick(void)
+{
+    uint8_t tick_result = signal_state_tick(&signal_state);
+
+    if (tick_result == SIGNAL_TICK_FINISHED) {
+        DL_GPIO_setPins(
+            GPIO_Sign_PORT, GPIO_Sign_PIN_LED_PIN | GPIO_Sign_PIN_Bee_PIN);
+    }
+    else if (tick_result == SIGNAL_TICK_STARTED) {
+        DL_GPIO_clearPins(
+            GPIO_Sign_PORT, GPIO_Sign_PIN_LED_PIN | GPIO_Sign_PIN_Bee_PIN);
+    }
 }
 
 /**
@@ -91,82 +160,141 @@ void Sign_LED_Bee(){
   * @param  无
   * @retval 无
   */
+void Control_ResetRuntime(void)
+{
+    uint8_t sensor_index;
+
+    EncoderA = 0;
+    EncoderB = 0;
+    EncoderC = 0;
+    EncoderD = 0;
+    encoder_reset();
+
+    speed_left = speed_const;
+    speed_right = speed_const;
+    angle_speed_left = 0;
+    angle_speed_right = 0;
+    angle_speed_const = 0;
+    Position_target = 0;
+    Angle_target = 0;
+    path_line = 0u;
+    pid_ans = 0;
+    pid_pathline_ans = 0;
+    pid_angle = 0;
+    huidu_read_status = 1;
+    huidu_data_sum = 0;
+    mode4_huidu_read_status = 1;
+    mode4_huidu_data_sum = 0;
+    for (sensor_index = 0u; sensor_index < 8u; ++sensor_index) {
+        huidu_data[sensor_index] = 0;
+        mode4_huidu_data[sensor_index] = 0;
+    }
+
+    mode2_1 = 0u;
+    mode2_2 = 0u;
+    mode2_bee = 0u;
+    mode3_1 = 0u;
+    mode3_2 = 0u;
+    mode3_1_angle4_change = MODE3_1_Line4;
+
+    mode4_v_L = 0;
+    mode4_v_R = 0;
+    mode4_pwm_ans = 0;
+    mode4_flag = 0u;
+    mode4_color_flag = 0u;
+    mode4_color_nums = 0u;
+    mode4_angle1_1 = 0.0f;
+    mode4_angle_flag = 0u;
+    mode4_circle_nums = 0u;
+
+    position_pid_state = (ControlPidState){0};
+    angle_pid_state = (ControlPidState){0};
+    mode3_angle_pid_state = (ControlPidState){0};
+    path_line_pid_state = (ControlPidState){0};
+    mode4_line_pid_state = (ControlPidState){0};
+}
+
 void Control_Init(void)
 {
+    mode_lifecycle_init(&mode_lifecycle);
+    Control_ResetRuntime();
+    signal_state_init(&signal_state);
+    DL_GPIO_setPins(
+        GPIO_Sign_PORT, GPIO_Sign_PIN_LED_PIN | GPIO_Sign_PIN_Bee_PIN);
     NVIC_EnableIRQ(TIMG0_INT_IRQn);//使能中断
     DL_TimerG_startCounter(TIMG0);
 }
 
-int Position_PID(int reality,int target)//走直线的PID函数，勿动
-{ 	
-    static float Bias,Pwm,Last_Bias,Integral_bias=0;
-    
-    Bias=reality-target;                            /* 计算偏差 */
-    Integral_bias+=Bias;	                        /* 偏差累积 */
-    
-    if(Integral_bias> Integral_bias_MAX) Integral_bias = Integral_bias_MAX;   /* 积分限幅 */
-    if(Integral_bias<-Integral_bias_MAX) Integral_bias = -Integral_bias_MIN;
-    
-    Pwm = (Position_KP*Bias)                        /* 比例环节 */
-         +(Position_KI*Integral_bias)               /* 积分环节 */
-         +(Position_KD*(Bias-Last_Bias));           /* 微分环节 */
-    
-    Last_Bias=Bias;                                 /* 保存上次偏差 */
-    return Pwm;                                     /* 输出结果 */
+int Position_PID(float reality,float target)//走直线的PID函数，勿动
+{
+    ControlPidState *state = &position_pid_state;
+
+    state->bias = control_heading_error_degrees((float)reality, (float)target);                            /* 计算环绕偏差 */
+    state->integral += state->bias;	                        /* 偏差累积 */
+
+    if(state->integral > Integral_bias_MAX) state->integral = Integral_bias_MAX;
+    if(state->integral < -Integral_bias_MAX) state->integral = -Integral_bias_MIN;
+
+    state->output = (Position_KP * state->bias)
+         +(Position_KI * state->integral)
+         +(Position_KD * (state->bias - state->last_bias));
+
+    state->last_bias = state->bias;
+    return state->output;
 }
 
-int Angle_PID(int reality,int target)//转一定角度的PID函数，有待优化
-{ 	
-    static float Bias_Angle,Pwm,Last_Bias_Angle,Integral_bias_Angle=0;
-    
-    Bias_Angle = reality-target;                            /* 计算偏差 */
-    Integral_bias_Angle += Bias_Angle;	                        /* 偏差累积 */
-    
-    if(Integral_bias_Angle> Integral_bias_MAX) Integral_bias_Angle = Integral_bias_MAX;   /* 积分限幅 */
-    if(Integral_bias_Angle<-Integral_bias_MAX) Integral_bias_Angle = -Integral_bias_MIN;
-    
-    Pwm = (Angle_KP*Bias_Angle)                        /* 比例环节 */
-         +(Angle_KI*Integral_bias_Angle)               /* 积分环节 */
-         +(Angle_KD*(Bias_Angle-Last_Bias_Angle));           /* 微分环节 */
-    
-    Last_Bias_Angle=Bias_Angle;                                 /* 保存上次偏差 */
-    return Pwm;                                     /* 输出结果 */
+int Angle_PID(float reality,float target)//转一定角度的PID函数，有待优化
+{
+    ControlPidState *state = &angle_pid_state;
+
+    state->bias = control_heading_error_degrees((float)reality, (float)target);
+    state->integral += state->bias;
+
+    if(state->integral > Integral_bias_MAX) state->integral = Integral_bias_MAX;
+    if(state->integral < -Integral_bias_MAX) state->integral = -Integral_bias_MIN;
+
+    state->output = (Angle_KP * state->bias)
+         +(Angle_KI * state->integral)
+         +(Angle_KD * (state->bias - state->last_bias));
+
+    state->last_bias = state->bias;
+    return state->output;
 }
 
-int mode3_Angle_PID(int reality,int target)//转一定角度的PID函数，有待优化
-{ 	
-    static float Bias_Angle,Pwm,Last_Bias_Angle,Integral_bias_Angle=0;
-    
-    Bias_Angle = reality-target;                            /* 计算偏差 */
-    Integral_bias_Angle += Bias_Angle;	                        /* 偏差累积 */
-    
-    if(Integral_bias_Angle> Integral_bias_MAX) Integral_bias_Angle = Integral_bias_MAX;   /* 积分限幅 */
-    if(Integral_bias_Angle<-Integral_bias_MAX) Integral_bias_Angle = -Integral_bias_MIN;
-    
-    Pwm = (mode3_Angle_KP*Bias_Angle)                        /* 比例环节 */
-         +(mode3_Angle_KI*Integral_bias_Angle)               /* 积分环节 */
-         +(mode3_Angle_KD*(Bias_Angle-Last_Bias_Angle));           /* 微分环节 */
-    
-    Last_Bias_Angle=Bias_Angle;                                 /* 保存上次偏差 */
-    return Pwm;                                     /* 输出结果 */
+int mode3_Angle_PID(float reality,float target)//转一定角度的PID函数，有待优化
+{
+    ControlPidState *state = &mode3_angle_pid_state;
+
+    state->bias = control_heading_error_degrees((float)reality, (float)target);
+    state->integral += state->bias;
+
+    if(state->integral > Integral_bias_MAX) state->integral = Integral_bias_MAX;
+    if(state->integral < -Integral_bias_MAX) state->integral = -Integral_bias_MIN;
+
+    state->output = (mode3_Angle_KP * state->bias)
+         +(mode3_Angle_KI * state->integral)
+         +(mode3_Angle_KD * (state->bias - state->last_bias));
+
+    state->last_bias = state->bias;
+    return state->output;
 }
 
 int PathLine_PID(int reality,int target)//走直线的PID函数，勿动
-{ 	
-    static float Bias_PathLine,Pwm,Last_Bias_PathLine,Integral_bias_PathLine=0;
-    
-    Bias_PathLine=target-reality;                            /* 计算偏差 目标-实际*/
-    Integral_bias_PathLine+=Bias_PathLine;	                        /* 偏差累积 */
-    
-    if(Integral_bias_PathLine> Integral_bias_MAX) Integral_bias_PathLine = Integral_bias_MAX;   /* 积分限幅 */
-    if(Integral_bias_PathLine<-Integral_bias_MAX) Integral_bias_PathLine = -Integral_bias_MIN;
+{
+    ControlPidState *state = &path_line_pid_state;
 
-    Pwm = (PathLine_KP*Bias_PathLine)                        /* 比例环节 */
-         +(PathLine_KI*Integral_bias_PathLine)               /* 积分环节 */
-         +(PathLine_KD*(Bias_PathLine-Last_Bias_PathLine));           /* 微分环节 */
-    
-    Last_Bias_PathLine=Bias_PathLine;                                 /* 保存上次偏差 */
-    return Pwm;                                     /* 输出结果 */
+    state->bias = target-reality;                            /* 计算偏差 目标-实际*/
+    state->integral += state->bias;
+
+    if(state->integral > Integral_bias_MAX) state->integral = Integral_bias_MAX;
+    if(state->integral < -Integral_bias_MAX) state->integral = -Integral_bias_MIN;
+
+    state->output = (PathLine_KP * state->bias)
+         +(PathLine_KI * state->integral)
+         +(PathLine_KD * (state->bias - state->last_bias));
+
+    state->last_bias = state->bias;
+    return state->output;
 }
 
 
@@ -179,71 +307,37 @@ int limit_control(int x,int x_min, int x_max)
     return x;
 }
 
-void huidu_updata()
+void huidu_updata(void)
 {
-    huidu_read_status = DL_GPIO_readPins( GPIOA,
-                GPIO_Sensor_PIN_huidu6_PIN | GPIO_Sensor_PIN_huidu5_PIN | GPIO_Sensor_PIN_huidu4_PIN |
-                GPIO_Sensor_PIN_huidu3_PIN| GPIO_Sensor_PIN_huidu2_PIN | GPIO_Sensor_PIN_huidu1_PIN);
-    huidu_data_sum=0;//求和前清零
-    for (i=1;i<=6;i++) {
-        huidu_data_sum+=huidu_data[i];//更新求和
-    }
+    static const uint32_t pin_masks[] = {
+        GPIO_Sensor_PIN_huidu1_PIN, GPIO_Sensor_PIN_huidu2_PIN,
+        GPIO_Sensor_PIN_huidu3_PIN, GPIO_Sensor_PIN_huidu4_PIN,
+        GPIO_Sensor_PIN_huidu5_PIN, GPIO_Sensor_PIN_huidu6_PIN
+    };
 
-    if ((huidu_read_status & GPIO_Sensor_PIN_huidu1_PIN)) {
-    huidu_data[1]=1;
-    }
-    else {
-    huidu_data[1]=0;
-    }
-
-    if (huidu_read_status & GPIO_Sensor_PIN_huidu2_PIN) {
-        huidu_data[2]=1;
-    }
-    else {
-        huidu_data[2]=0;
-    }
-
-    if (huidu_read_status & GPIO_Sensor_PIN_huidu3_PIN) {
-        huidu_data[3]=1;
-    }
-    else {
-        huidu_data[3]=0;
-    }
-
-    if (huidu_read_status & GPIO_Sensor_PIN_huidu4_PIN) {
-        huidu_data[4]=1;
-        }
-    else {
-    huidu_data[4]=0;
-    }
-
-    if (huidu_read_status & GPIO_Sensor_PIN_huidu5_PIN) {
-    huidu_data[5]=1;
-    }
-    else {
-    huidu_data[5]=0;
-    }
-
-    if (huidu_read_status & GPIO_Sensor_PIN_huidu6_PIN) {
-    huidu_data[6]=1;
-    }
-    else {
-    huidu_data[6]=0;
-    }
-    
+    huidu_read_status = DL_GPIO_readPins(
+        GPIOA, GPIO_Sensor_PIN_huidu6_PIN | GPIO_Sensor_PIN_huidu5_PIN |
+        GPIO_Sensor_PIN_huidu4_PIN | GPIO_Sensor_PIN_huidu3_PIN |
+        GPIO_Sensor_PIN_huidu2_PIN | GPIO_Sensor_PIN_huidu1_PIN);
+    huidu_data_sum = sensor_snapshot_decode(
+        (uint32_t)huidu_read_status, pin_masks, &huidu_data[1], 6u);
 }
 
-void  mode3_go_line(int mode3_target_line, float mode3_line_angle){
+void mode3_go_line(uint64_t mode3_target_line, float mode3_line_angle){
+    uint64_t encoder_step;
+
     encoder_read(&EncoderA,&EncoderB, &EncoderC,&EncoderD);//更新编码器值
-    path_line = path_line+ my_abs(EncoderA)+ my_abs(EncoderB);
-    pid_ans=Position_PID(Angle[2], mode3_line_angle);
+    encoder_step = control_add_u64_saturating(
+        control_abs_i64(EncoderA), control_abs_i64(EncoderB));
+    path_line = control_add_u64_saturating(path_line, encoder_step);
+    pid_ans=Position_PID(control_heading(), mode3_line_angle);
     speed_left+=pid_ans;
     speed_right-=pid_ans;
 
     speed_left=limit_control(speed_left, 10, 30);
     speed_right=limit_control(speed_right, 10, 30);
     
-    if ( my_abs(mode3_target_line-path_line) <= 15 ) {
+    if (control_distance_reached(path_line, mode3_target_line, MODE3_DISTANCE_TOLERANCE)) {
         path_line=0;
         if (mode3_target_line==MODE3_1_Line1) {
             brake();
@@ -279,12 +373,11 @@ void  mode3_go_line(int mode3_target_line, float mode3_line_angle){
 
 void mode3_only_go_line(float mode3_line_angle){
     huidu_updata();//更新灰度
-    pid_ans=Position_PID(Angle[2],Position_target);
+    pid_ans=Position_PID(control_heading(),Position_target);
     speed_left+=pid_ans;
     speed_right-=pid_ans;
     speed_left = limit_control(speed_left, 10, 30);
     speed_right = limit_control(speed_right, 10, 30);
-    huidu_updata();
     if (huidu_data_sum!=6) {//退出条件：遇到黑线
         brake();
         mode3_1 += 1;//这里 已经 补充切换模式
@@ -299,28 +392,18 @@ void mode3_only_go_line(float mode3_line_angle){
 
 void mode3_turn_angle(float mode3_target_angle)
 {
-    static float test;
-    // pid_angle=mode3_Angle_PID(Angle[2], mode3_target_angle);//!!!!!!!!!!
-    ///-----------------------------------------------------------------!!!!!!!!!!!!!!-------------------------
-    if (mode3_1==7) {
-        if (Angle[2]>=0) {
-            Angle[2] = (-1)*Angle[2];
-        }
-        pid_angle=mode3_Angle_PID(Angle[2], mode3_target_angle);
-        speed_left+=pid_angle;
-        speed_right-=pid_angle;
-    }
-    else {
-        pid_angle=mode3_Angle_PID(Angle[2], mode3_target_angle);
-        speed_left+=pid_angle;
-        speed_right-=pid_angle;
-    }
+    float heading = control_heading();
+    float angle_error;
+
+    pid_angle = mode3_Angle_PID(heading, mode3_target_angle);
+    speed_left += pid_angle;
+    speed_right -= pid_angle;
     speed_left = limit_control(speed_left, -30, 30);
     speed_right = limit_control(speed_right, -30, 30);
-    Load(speed_left, speed_right, speed_left,speed_right);
-    test=get_abs(  (int)(Angle[2])  -mode3_target_angle );
+    angle_error = control_heading_abs_error_degrees(heading, mode3_target_angle);
 
-    if ( test <= 1) {
+    if (angle_error <= 1.0f) {
+        brake();
         if (mode3_target_angle == MODE3_1_Angle1) {//根据模式不同选择跳转不同的模式
             mode3_1 = 2;
         }
@@ -333,6 +416,9 @@ void mode3_turn_angle(float mode3_target_angle)
         else if (mode3_target_angle == MODE3_1_Angle5) {
             mode3_1=10;
         }
+    }
+    else {
+        Load(speed_left, speed_right, speed_left,speed_right);
     }                                                                                                                          
 }
 
@@ -350,10 +436,39 @@ void search_line()
   */
 void TIMG0_IRQHandler(void)
 {
-    int PWM_out;int i;
+    uint8_t lifecycle_event;
     switch(DL_TimerG_getPendingInterrupt(TIMG0))
 	{
 		case DL_TIMER_IIDX_ZERO:
+        control_scheduler_init(&control_scheduler_output);
+        Sign_LED_Bee_Tick();
+        uart_gyro_tick();
+        if (!signal_state_is_idle(&signal_state)) {
+            brake();
+            control_scheduler_commit_output();
+            break;
+        }
+        lifecycle_event = mode_lifecycle_step(&mode_lifecycle, mode, begin);
+        if (lifecycle_event == MODE_LIFECYCLE_ENTER) {
+            Control_ResetRuntime();
+        }
+        else if (lifecycle_event == MODE_LIFECYCLE_EXIT ||
+            lifecycle_event == MODE_LIFECYCLE_ABORT ||
+            lifecycle_event == MODE_LIFECYCLE_INVALID) {
+            brake();
+            Control_ResetRuntime();
+            begin = 0u;
+            if (lifecycle_event == MODE_LIFECYCLE_INVALID) {
+                mode = 0u;
+            }
+            control_scheduler_commit_output();
+            break;
+        }
+        if (begin && !uart_gyro_is_fresh()) {
+            brake();
+            control_scheduler_commit_output();
+            break;
+        }
         if(begin)
 		{        
 			// NVIC_DianableIRQ(GPIOB_INT_IRQn);//包含按键和编码器读取的外部中断,
@@ -361,7 +476,7 @@ void TIMG0_IRQHandler(void)
                 if (mode==1) {//模式1 走直线
                     huidu_updata();//更新灰度
 
-                    pid_ans=Position_PID(Angle[2],Position_target);
+                    pid_ans=Position_PID(control_heading(),Position_target);
                     // speed_left=speed_const;
                     // speed_right=speed_const;
                     speed_left+=pid_ans;
@@ -383,7 +498,7 @@ void TIMG0_IRQHandler(void)
                     huidu_updata();
                     //走直线A------B 目标角度 0度
                     if (mode2_1==0 && mode2_2==0) {
-                        pid_ans=Position_PID(Angle[2],0);
+                        pid_ans=Position_PID(control_heading(),0);
                         speed_left+=pid_ans;
                         speed_right-=pid_ans;
                         speed_left = limit_control(speed_left, 10, 30);
@@ -455,33 +570,35 @@ void TIMG0_IRQHandler(void)
                                 Sign_LED_Bee();
                                 mode2_bee=1;
                             }
-
-                            pid_angle=Angle_PID(Angle[2], -179);
-                            speed_left+=pid_angle;
-                            speed_right-=pid_angle;
-                            speed_left = limit_control(speed_left, -30, 30);
-                            speed_right = limit_control(speed_right, -30, 30);
-                            Load(speed_left, speed_right, speed_left,speed_right);
-                            if (  (my_abs(Angle[2]+179)<2) || (my_abs(Angle[2]-179)<2)  ) {
-                                // brake();
-                                // //-----------//
-                                // Sign_LED_Bee();
-
-                                mode2_1=1,mode2_2=1;
+                            else {
+                                pid_angle=Angle_PID(control_heading(), -179);
+                                speed_left+=pid_angle;
+                                speed_right-=pid_angle;
+                                speed_left = limit_control(speed_left, -30, 30);
+                                speed_right = limit_control(speed_right, -30, 30);
+                                if (control_heading_abs_error_degrees(control_heading(), -179.0f) < 2.0f) {
+                                    brake();
+                                    mode2_1=1,mode2_2=1;
+                                }
+                                else {
+                                    Load(speed_left, speed_right, speed_left,speed_right);
+                                }
                             }
 
                         }
                                 
-                    speed_left=limit_control(speed_left, 10, 65);
-                    speed_right=limit_control(speed_right, 5, 60);
-                    Load(speed_left,speed_right,speed_left,speed_right);
-                    encoder_read(&EncoderA,&EncoderB, &EncoderC,&EncoderD);//更新编码器值
+                    if (huidu_data_sum!=6) {
+                        speed_left=limit_control(speed_left, 10, 65);
+                        speed_right=limit_control(speed_right, 5, 60);
+                        Load(speed_left,speed_right,speed_left,speed_right);
+                        encoder_read(&EncoderA,&EncoderB, &EncoderC,&EncoderD);//更新编码器值
+                    }
                     }
 
 
                     //走直线 C-----D
                     else if (mode2_1==1&&mode2_2==1) {
-                        pid_ans=Position_PID(Angle[2],-178);//第二次走直线目标角度  （）
+                        pid_ans=Position_PID(control_heading(),-178);//第二次走直线目标角度  （）
                         speed_left+=pid_ans;
                         speed_right-=pid_ans;
                         speed_left = limit_control(speed_left, 10, 30);
@@ -501,7 +618,7 @@ void TIMG0_IRQHandler(void)
                         }
                     }
                     //巡线D------A
-                    if (mode2_1==0&&mode2_2==1) {
+                    else if (mode2_1==0&&mode2_2==1) {
                         if (huidu_data[1]==0) {
                         speed_left = 0.8*speed_const;
                         //speed_left -= 5;
@@ -550,26 +667,28 @@ void TIMG0_IRQHandler(void)
                             mode=0;
                             mode2_1=0;mode2_2=0;
                         }
-                        speed_left=limit_control(speed_left, 10, 65);
-                        speed_right=limit_control(speed_right, 5, 60);
-                        Load(speed_left,speed_right,speed_left,speed_right);
-                        encoder_read(&EncoderA,&EncoderB, &EncoderC,&EncoderD);//更新编码器值
+                        if (huidu_data_sum!=6) {
+                            speed_left=limit_control(speed_left, 10, 65);
+                            speed_right=limit_control(speed_right, 5, 60);
+                            Load(speed_left,speed_right,speed_left,speed_right);
+                            encoder_read(&EncoderA,&EncoderB, &EncoderC,&EncoderD);//更新编码器值
+                        }
                     }
 
 
 
                     // else if(huidu_data_sum==6){//调整角度
                         
-                    //     Position_target = Angle[2];//切换目标值
-                    //     pid_angle=Angle_PID(Angle[2], -179);
-                    //     // pid_angle=Angle_PID(Angle[2], -90);
+                    //     Position_target = control_heading();//切换目标值
+                    //     pid_angle=Angle_PID(control_heading(), -179);
+                    //     // pid_angle=Angle_PID(control_heading(), -90);
                     //     speed_left+=pid_angle;
                     //     speed_right-=pid_angle;
                     //     speed_left = limit_control(speed_left, -30, 30);
                     //     speed_right = limit_control(speed_right, -30, 30);
                     //     Load(speed_left, speed_right, speed_left,speed_right);
                         
-                    //     if (my_abs(Angle[2]+179)<2) {
+                    //     if (my_abs(control_heading()+179)<2) {
                     //         mode=1;
                     //     }
                     // }
@@ -642,9 +761,9 @@ void TIMG0_IRQHandler(void)
                         }
                         else if ( huidu_data_sum==6 ) {//退出巡线条件
                             //调整角度 -180度为目标角度
-                            // pid_angle=Angle_PID(Angle[2], 179);//出线调整的目标角度
-                            // pid_angle=mode3_Angle_PID(Angle[2], 175);//出线调整的目标角度//测试调整角度
-                            pid_angle=mode3_Angle_PID(Angle[2], MODE3_1_Angle3);//出线调整的目标角度//测试调整角度
+                            // pid_angle=Angle_PID(control_heading(), 179);//出线调整的目标角度
+                            // pid_angle=mode3_Angle_PID(control_heading(), 175);//出线调整的目标角度//测试调整角度
+                            pid_angle=mode3_Angle_PID(control_heading(), MODE3_1_Angle3);//出线调整的目标角度//测试调整角度
 
 
                             speed_left+=pid_angle;
@@ -652,7 +771,8 @@ void TIMG0_IRQHandler(void)
                             speed_left = limit_control(speed_left, -30, 30);
                             speed_right = limit_control(speed_right, -30, 30);
                             Load(speed_left, speed_right, speed_left,speed_right);
-                            if (my_abs( my_abs(Angle[2]) - MODE3_1_Angle3 )<1) {
+                            if (control_heading_abs_error_degrees(
+                                control_heading(), (float)MODE3_1_Angle3) < 1.0f) {
 
                                 brake();
                                 //-----------//
@@ -660,10 +780,12 @@ void TIMG0_IRQHandler(void)
                                 mode3_1=6;
                             }
                         }
-                        speed_left=limit_control(speed_left, 10, 65);
-                        speed_right=limit_control(speed_right, 5, 60);
-                        Load(speed_left,speed_right,speed_left,speed_right);
-                        encoder_read(&EncoderA,&EncoderB, &EncoderC,&EncoderD);//更新编码器值
+                        if (huidu_data_sum!=6) {
+                            speed_left=limit_control(speed_left, 10, 65);
+                            speed_right=limit_control(speed_right, 5, 60);
+                            Load(speed_left,speed_right,speed_left,speed_right);
+                            encoder_read(&EncoderA,&EncoderB, &EncoderC,&EncoderD);//更新编码器值
+                        }
                     }
                     else if (mode3_1==6) {
                         mode3_go_line(MODE3_1_Line3, MODE3_1_Angle3);
@@ -734,10 +856,12 @@ void TIMG0_IRQHandler(void)
                             mode3_1=12;
                             mode=0;
                         }
-                    speed_left=limit_control(speed_left, 10, 65);
-                    speed_right=limit_control(speed_right, 5, 60);
-                    Load(speed_left,speed_right,speed_left,speed_right);
-                    encoder_read(&EncoderA,&EncoderB, &EncoderC,&EncoderD);//更新编码器值
+                        if (huidu_data_sum!=6) {
+                            speed_left=limit_control(speed_left, 10, 65);
+                            speed_right=limit_control(speed_right, 5, 60);
+                            Load(speed_left,speed_right,speed_left,speed_right);
+                            encoder_read(&EncoderA,&EncoderB, &EncoderC,&EncoderD);//更新编码器值
+                        }
                     }
 
                 }
@@ -746,7 +870,7 @@ void TIMG0_IRQHandler(void)
                     if(mode4_flag==0)
                     {
                         mode4_huidu_updata();
-                        mode4_pwm_ans = Mode4_line_PID(Angle[2], -37);
+                        mode4_pwm_ans = Mode4_line_PID(control_heading(), -37);
                         mode4_v_L =  2*mode4_V_C + mode4_pwm_ans ;
                         mode4_v_R =  2*mode4_V_C - mode4_pwm_ans ;//V_C是速度常数，可调
                         mode4_v_L=2*limit_control(mode4_v_L, -20, 20);
@@ -817,7 +941,7 @@ void TIMG0_IRQHandler(void)
                     }
                     else if (mode4_flag==3) {
                         mode4_huidu_updata();
-                        if ( Angle[2]>= 0 ) {
+                        if ( control_heading()>= 0 ) {
                             mode4_v_L =  -2*mode4_V_C;
                             mode4_v_R =  2*mode4_V_C;//V_C是速度常数，可调
                             mode4_v_L=2*limit_control(mode4_v_L, -20, 20);
@@ -825,7 +949,7 @@ void TIMG0_IRQHandler(void)
                             Load(mode4_v_L, mode4_v_R, mode4_v_L, mode4_v_R);
                         }
                         else {
-                            mode4_pwm_ans = Mode4_line_PID(Angle[2], mode4_angle_change);// mode4_angle_change默认-144度 变量可调
+                            mode4_pwm_ans = Mode4_line_PID(control_heading(), mode4_angle_change);// mode4_angle_change默认-144度 变量可调
                             mode4_v_L =  2*mode4_V_C + mode4_pwm_ans ;
                             mode4_v_R =  2*mode4_V_C - mode4_pwm_ans ;//V_C是速度常数，可调
                             mode4_v_L=2*limit_control(mode4_v_L, -20, 20);
@@ -833,7 +957,7 @@ void TIMG0_IRQHandler(void)
                             Load(mode4_v_L, mode4_v_R, mode4_v_L, mode4_v_R);
                             if (mode4_huidu_data_sum!=8) {//不等于8，识别到黑色
                                 if (mode4_angle_flag==0) {
-                                    mode4_angle1_1=Angle[2];//获取微调角度到变量
+                                    mode4_angle1_1=control_heading();//获取微调角度到变量
                                     mode4_angle_flag=1;
                                 }
                                 mode4_pwm_ans = Mode4_line_PID(mode4_angle1_1, mode4_angle1_1+4);
@@ -841,7 +965,8 @@ void TIMG0_IRQHandler(void)
                                 mode4_v_R =  2*mode4_V_C - mode4_pwm_ans ;//V_C是速度常数，可调
                                 mode4_v_L=2*limit_control(mode4_v_L, -20, 20);
                                 mode4_v_R=2*limit_control(mode4_v_R, -20, 20); //限幅可改
-                                if (fabs(Angle[2]-mode4_angle1_1)<=0.5) {
+                                if (control_heading_abs_error_degrees(
+                                    control_heading(), mode4_angle1_1 + 4.0f) <= 0.5f) {
                                     brake();
                                     Sign_LED_Bee();
                                     mode4_flag=4;
@@ -923,7 +1048,7 @@ void TIMG0_IRQHandler(void)
                     else if(mode4_flag==5)
                     {
                         mode4_huidu_updata();
-                        mode4_pwm_ans = Mode4_line_PID(Angle[2], -33);
+                        mode4_pwm_ans = Mode4_line_PID(control_heading(), -33);
                         mode4_v_L =  2*mode4_V_C + mode4_pwm_ans ;
                         mode4_v_R =  2*mode4_V_C - mode4_pwm_ans ;//V_C是速度常数，可调
                         mode4_v_L=2*limit_control(mode4_v_L, -20, 20);
@@ -944,7 +1069,7 @@ void TIMG0_IRQHandler(void)
                     if(mode4_flag==0)
                     {
                         mode4_huidu_updata();
-                        mode4_pwm_ans = Mode4_line_PID(Angle[2], -37);
+                        mode4_pwm_ans = Mode4_line_PID(control_heading(), -37);
                         mode4_v_L =  2*mode4_V_C + mode4_pwm_ans ;
                         mode4_v_R =  2*mode4_V_C - mode4_pwm_ans ;//V_C是速度常数，可调
                         mode4_v_L=2*limit_control(mode4_v_L, -20, 20);
@@ -1015,7 +1140,7 @@ void TIMG0_IRQHandler(void)
                     }
                     else if (mode4_flag==3) {
                         mode4_huidu_updata();
-                        if ( Angle[2]>= 0 ) {
+                        if ( control_heading()>= 0 ) {
                             mode4_v_L =  -2*mode4_V_C;
                             mode4_v_R =  2*mode4_V_C;//V_C是速度常数，可调
                             mode4_v_L=2*limit_control(mode4_v_L, -20, 20);
@@ -1023,7 +1148,7 @@ void TIMG0_IRQHandler(void)
                             Load(mode4_v_L, mode4_v_R, mode4_v_L, mode4_v_R);
                         }
                         else {
-                            mode4_pwm_ans = Mode4_line_PID(Angle[2], mode4_angle_change);
+                            mode4_pwm_ans = Mode4_line_PID(control_heading(), mode4_angle_change);
                             mode4_v_L =  2*mode4_V_C + mode4_pwm_ans ;
                             mode4_v_R =  2*mode4_V_C - mode4_pwm_ans ;//V_C是速度常数，可调
                             mode4_v_L=2*limit_control(mode4_v_L, -20, 20);
@@ -1100,7 +1225,7 @@ void TIMG0_IRQHandler(void)
                     if(mode4_flag==0)
                     {
                         mode4_huidu_updata();
-                        mode4_pwm_ans = Mode4_line_PID(Angle[2], -37);
+                        mode4_pwm_ans = Mode4_line_PID(control_heading(), -37);
                         mode4_v_L =  2*mode4_V_C + mode4_pwm_ans ;
                         mode4_v_R =  2*mode4_V_C - mode4_pwm_ans ;//V_C是速度常数，可调
                         mode4_v_L=2*limit_control(mode4_v_L, -20, 20);
@@ -1171,7 +1296,7 @@ void TIMG0_IRQHandler(void)
                     }
                     else if (mode4_flag==3) {
                         mode4_huidu_updata();
-                        if ( Angle[2]>= 0 ) {
+                        if ( control_heading()>= 0 ) {
                             mode4_v_L =  -2*mode4_V_C;
                             mode4_v_R =  2*mode4_V_C;//V_C是速度常数，可调
                             mode4_v_L=2*limit_control(mode4_v_L, -20, 20);
@@ -1179,7 +1304,7 @@ void TIMG0_IRQHandler(void)
                             Load(mode4_v_L, mode4_v_R, mode4_v_L, mode4_v_R);
                         }
                         else {
-                            mode4_pwm_ans = Mode4_line_PID(Angle[2], -145);
+                            mode4_pwm_ans = Mode4_line_PID(control_heading(), -145);
                             mode4_v_L =  2*mode4_V_C + mode4_pwm_ans ;
                             mode4_v_R =  2*mode4_V_C - mode4_pwm_ans ;//V_C是速度常数，可调
                             mode4_v_L=2*limit_control(mode4_v_L, -20, 20);
@@ -1251,7 +1376,7 @@ void TIMG0_IRQHandler(void)
                     else if(mode4_flag==5)
                     {
                         mode4_huidu_updata();
-                        mode4_pwm_ans = Mode4_line_PID(Angle[2], -33);
+                        mode4_pwm_ans = Mode4_line_PID(control_heading(), -33);
                         mode4_v_L =  2*mode4_V_C + mode4_pwm_ans ;
                         mode4_v_R =  2*mode4_V_C - mode4_pwm_ans ;//V_C是速度常数，可调
                         mode4_v_L=2*limit_control(mode4_v_L, -20, 20);
@@ -1268,7 +1393,7 @@ void TIMG0_IRQHandler(void)
                 else if (mode==7) {
                     if(mode4_flag==0){
                         mode4_huidu_updata();
-                        mode4_pwm_ans = Mode4_line_PID(Angle[2], 0);
+                        mode4_pwm_ans = Mode4_line_PID(control_heading(), 0);
                         mode4_v_L =  2*mode4_V_C + mode4_pwm_ans ;
                         mode4_v_R =  2*mode4_V_C - mode4_pwm_ans ;//V_C是速度常数，可调
                         mode4_v_L=2*limit_control(mode4_v_L, -20, 20);
@@ -1340,7 +1465,7 @@ void TIMG0_IRQHandler(void)
                     else if (mode4_flag==3) {
 
                         mode4_huidu_updata();
-                        mode4_pwm_ans = Mode4_line_PID(Angle[2], -179);
+                        mode4_pwm_ans = Mode4_line_PID(control_heading(), -179);
                         mode4_v_L =  2*mode4_V_C + 0.5*mode4_pwm_ans ;
                         mode4_v_R =  2*mode4_V_C - 0.5*mode4_pwm_ans ;//V_C是速度常数，可调 pid结果改为0.5
                         mode4_v_L=2*limit_control(mode4_v_L, -20, 20);
@@ -1420,6 +1545,7 @@ void TIMG0_IRQHandler(void)
                     mode4_huidu_updata();
                 }
                 else {
+                    brake();
                     begin=0;//mode 值都不对，则返回begin 0 
                 }
 
@@ -1429,9 +1555,12 @@ void TIMG0_IRQHandler(void)
         {
             huidu_updata();
             mode4_huidu_updata();
-            if(mode>7)
+            if(mode>7) {
+                brake();
                 mode=0;
+            }
         }
+        control_scheduler_commit_output();
 			break;
 
 			default:
@@ -1442,22 +1571,14 @@ void TIMG0_IRQHandler(void)
 
 int Mode4_line_PID(float reality_angle, float target_angle)
 {
-    //预计采用PD算法，不用积分项
-    static float Error_Angle, Last_Error, Integral_error, PWM_line=0;
+    ControlPidState *state = &mode4_line_pid_state;
 
-    Error_Angle = reality_angle-target_angle;//计算偏差
-    
-    // if (fabsf(Error_Angle)<=0.5) {
-    //     return 0;
-    // }
-    // Integral_error+=Error_Angle;//累计偏差
-    // else {
-        PWM_line = (Mode4_line_Kp*Error_Angle)    //比例环节
-                + (Mode4_line_Kp*(Error_Angle-Last_Error)); //微分环节
+    state->bias = control_heading_error_degrees(reality_angle, target_angle);//计算环绕偏差
+    state->output = (Mode4_line_Kp * state->bias)
+            + (Mode4_line_Kp * (state->bias - state->last_bias));
 
-        Last_Error=Error_Angle;
-        return 10*PWM_line;//结果乘10倍再保存
-    // }
+    state->last_bias = state->bias;
+    return 10 * state->output;//结果乘10倍再保存
 }
 
 
@@ -1480,71 +1601,21 @@ int Mode4_line_PID(float reality_angle, float target_angle)
 // }
 
 // 独立灰度更新函数
-void mode4_huidu_updata()
+void mode4_huidu_updata(void)
 {
-    mode4_huidu_read_status = DL_GPIO_readPins( GPIOA,
-                GPIO_Sensor_PIN_huidu6_PIN | GPIO_Sensor_PIN_huidu5_PIN | GPIO_Sensor_PIN_huidu4_PIN |
-                GPIO_Sensor_PIN_huidu3_PIN| GPIO_Sensor_PIN_huidu2_PIN | GPIO_Sensor_PIN_huidu1_PIN |
-                GPIO_Sensor_PIN_huidu0_PIN| GPIO_Sensor_PIN_huidu7_PIN);
-    mode4_huidu_data_sum=0;//求和前清零
-    for (i=0;i<=7;i++) {
-        mode4_huidu_data_sum+=mode4_huidu_data[i];//更新求和
-    }
-    if ((mode4_huidu_read_status & GPIO_Sensor_PIN_huidu1_PIN)) {
-    mode4_huidu_data[1]=1;
-    }
-    else {
-    mode4_huidu_data[1]=0;
-    }
+    static const uint32_t pin_masks[] = {
+        GPIO_Sensor_PIN_huidu0_PIN, GPIO_Sensor_PIN_huidu1_PIN,
+        GPIO_Sensor_PIN_huidu2_PIN, GPIO_Sensor_PIN_huidu3_PIN,
+        GPIO_Sensor_PIN_huidu4_PIN, GPIO_Sensor_PIN_huidu5_PIN,
+        GPIO_Sensor_PIN_huidu6_PIN, GPIO_Sensor_PIN_huidu7_PIN
+    };
 
-    if (mode4_huidu_read_status & GPIO_Sensor_PIN_huidu2_PIN) {
-        mode4_huidu_data[2]=1;
-    }
-    else {
-        mode4_huidu_data[2]=0;
-    }
-
-    if (mode4_huidu_read_status & GPIO_Sensor_PIN_huidu3_PIN) {
-        mode4_huidu_data[3]=1;
-    }
-    else {
-        mode4_huidu_data[3]=0;
-    }
-
-    if (mode4_huidu_read_status & GPIO_Sensor_PIN_huidu4_PIN) {
-        mode4_huidu_data[4]=1;
-        }
-    else {
-    mode4_huidu_data[4]=0;
-    }
-
-    if (mode4_huidu_read_status & GPIO_Sensor_PIN_huidu5_PIN) {
-    mode4_huidu_data[5]=1;
-    }
-    else {
-    mode4_huidu_data[5]=0;
-    }
-
-    if (mode4_huidu_read_status & GPIO_Sensor_PIN_huidu6_PIN) {
-    mode4_huidu_data[6]=1;
-    }
-    else {
-    mode4_huidu_data[6]=0;
-    }
-    //----------------------------------------------------------
-
-    if (mode4_huidu_read_status & GPIO_Sensor_PIN_huidu0_PIN) {
-    mode4_huidu_data[0]=1;
-    }
-    else {
-    mode4_huidu_data[0]=0;
-    }
-
-    if (mode4_huidu_read_status & GPIO_Sensor_PIN_huidu7_PIN) {
-    mode4_huidu_data[7]=1;
-    }
-    else {
-    mode4_huidu_data[7]=0;
-    }
-
+    mode4_huidu_read_status = DL_GPIO_readPins(
+        GPIOA, GPIO_Sensor_PIN_huidu6_PIN | GPIO_Sensor_PIN_huidu5_PIN |
+        GPIO_Sensor_PIN_huidu4_PIN | GPIO_Sensor_PIN_huidu3_PIN |
+        GPIO_Sensor_PIN_huidu2_PIN | GPIO_Sensor_PIN_huidu1_PIN |
+        GPIO_Sensor_PIN_huidu0_PIN | GPIO_Sensor_PIN_huidu7_PIN);
+    mode4_huidu_data_sum = sensor_snapshot_decode(
+        (uint32_t)mode4_huidu_read_status, pin_masks,
+        mode4_huidu_data, 8u);
 }

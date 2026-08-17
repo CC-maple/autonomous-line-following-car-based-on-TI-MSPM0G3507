@@ -1,0 +1,49 @@
+#include <assert.h>
+#include <stdio.h>
+
+#include "Control/control_scheduler.h"
+
+static void test_brake_is_final(void)
+{
+    ControlSchedulerOutput output;
+
+    control_scheduler_init(&output);
+    control_scheduler_request_load(&output, 1, 2, 3, 4);
+    control_scheduler_request_brake(&output);
+    control_scheduler_request_load(&output, 5, 6, 7, 8);
+
+    assert(control_scheduler_should_brake(&output));
+    assert(!output.command_valid);
+}
+
+static void test_last_command_wins(void)
+{
+    ControlSchedulerOutput output;
+
+    control_scheduler_init(&output);
+    control_scheduler_request_load(&output, 1, 2, 3, 4);
+    control_scheduler_request_load(&output, 5, 6, 7, 8);
+
+    assert(!control_scheduler_should_brake(&output));
+    assert(output.motor1 == 5);
+    assert(output.motor2 == 6);
+    assert(output.motor3 == 7);
+    assert(output.motor4 == 8);
+}
+
+static void test_empty_tick_brakes(void)
+{
+    ControlSchedulerOutput output;
+
+    control_scheduler_init(&output);
+    assert(control_scheduler_should_brake(&output));
+}
+
+int main(void)
+{
+    test_brake_is_final();
+    test_last_command_wins();
+    test_empty_tick_brakes();
+    puts("control scheduler tests passed");
+    return 0;
+}

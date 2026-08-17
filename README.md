@@ -14,6 +14,31 @@
 - 按键选择不同的行驶模式
 - OLED 显示角度、模式、灰度和速度信息
 
+## 无 CCS 命令行构建
+
+项目新增了 [`standalone-ticlang/`](standalone-ticlang/README.md) 构建入口，可以不安装 Code Composer Studio，直接使用以下工具完成 SysConfig 生成、编译和链接：
+
+- MSPM0 SDK 2.01.00.03
+- SysConfig 1.20.0+3587
+- TI Arm Clang 3.2.2.LTS
+- GNU Make
+
+当前机器上的默认安装路径写在 `standalone-ticlang/Makefile` 中，也可以通过 Make 命令行变量覆盖。PowerShell 构建命令：
+
+```powershell
+& "D:\clion-stm32\MinGW\bin\mingw32-make.exe" `
+  -C "E:\Ee\my_project_refactor\standalone-ticlang" all
+```
+
+构建成功后，固件和链接映射分别位于：
+
+```text
+standalone-ticlang/my_project_08012135.out
+standalone-ticlang/my_project_08012135.map
+```
+
+SysConfig 生成文件、目标文件、`.out` 和 `.map` 已由 `standalone-ticlang/.gitignore` 排除，不应手工编辑或提交。当前独立构建已通过 SysConfig 严格验证、TI Arm Clang 编译链接和全部 7 组 host 回归测试；XDS110 下载启动及真实车辆行为仍待验证。
+
 ## 已知问题
 
 本仓库主要用于保存 2024 年竞赛期间形成的代码，目前尚未完成全面修正和重新实车验收。

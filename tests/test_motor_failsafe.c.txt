@@ -1,0 +1,57 @@
+#include <assert.h>
+#include <limits.h>
+#include <stdint.h>
+#include <stdio.h>
+
+static uint32_t pwm_values[4];
+static uint32_t set_count;
+static uint32_t clear_count;
+
+void DL_GPIO_setPins(void *port, uint32_t pins)
+{
+    (void)port;
+    (void)pins;
+    ++set_count;
+}
+
+void DL_GPIO_clearPins(void *port, uint32_t pins)
+{
+    (void)port;
+    (void)pins;
+    ++clear_count;
+}
+
+void DL_TimerG_setCaptureCompareValue(void *timer, uint32_t value, int index)
+{
+    (void)timer;
+    assert(index >= 0 && index < 4);
+    pwm_values[index] = value;
+}
+
+void brake(void);
+int my_abs(int value);
+int get_abs(int value);
+
+int main(void)
+{
+    pwm_values[0] = 90;
+    pwm_values[1] = 80;
+    pwm_values[2] = 70;
+    pwm_values[3] = 60;
+
+    brake();
+
+    assert(pwm_values[0] == 0);
+    assert(pwm_values[1] == 0);
+    assert(pwm_values[2] == 0);
+    assert(pwm_values[3] == 0);
+    assert(set_count == 8);
+    assert(clear_count == 0);
+    assert(my_abs(-7) == 7);
+    assert(get_abs(7) == 7);
+    assert(my_abs(INT_MIN) == INT_MAX);
+    assert(get_abs(INT_MIN) == INT_MAX);
+
+    puts("motor failsafe tests passed");
+    return 0;
+}

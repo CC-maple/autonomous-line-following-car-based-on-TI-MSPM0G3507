@@ -1,0 +1,79 @@
+#include <assert.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+
+#include "Control/sensor_snapshot.h"
+
+static const uint32_t masks[8] = {
+    1u << 0, 1u << 3, 1u << 7, 1u << 12,
+    1u << 16, 1u << 21, 1u << 25, 1u << 30
+};
+
+static uint32_t all_masks(void)
+{
+    uint32_t raw = 0u;
+    size_t channel;
+
+    for (channel = 0u; channel < 8u; ++channel) {
+        raw |= masks[channel];
+    }
+    return raw;
+}
+
+static void test_all_high_and_all_low(void)
+{
+    int8_t values[8] = {0};
+    size_t channel;
+
+    assert(sensor_snapshot_decode(all_masks(), masks, values, 8u) == 8);
+    for (channel = 0u; channel < 8u; ++channel) {
+        assert(values[channel] == 1);
+    }
+
+    assert(sensor_snapshot_decode(0u, masks, values, 8u) == 0);
+    for (channel = 0u; channel < 8u; ++channel) {
+        assert(values[channel] == 0);
+    }
+}
+
+static void test_single_low_and_successive_frames(void)
+{
+    int8_t values[8] = {0};
+    uint32_t raw = all_masks() & ~masks[3];
+
+    assert(sensor_snapshot_decode(raw, masks, values, 8u) == 7);
+    assert(values[3] == 0);
+    assert(values[2] == 1);
+    assert(values[4] == 1);
+
+    assert(sensor_snapshot_decode(masks[6], masks, values, 8u) == 1);
+    assert(values[6] == 1);
+    assert(values[3] == 0);
+    assert(values[7] == 0);
+}
+
+static void test_six_channel_offset_write(void)
+{
+    int8_t values[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
+    uint32_t raw = masks[0] | masks[2] | masks[5];
+
+    assert(sensor_snapshot_decode(raw, masks, &values[1], 6u) == 3);
+    assert(values[0] == -1);
+    assert(values[1] == 1);
+    assert(values[2] == 0);
+    assert(values[3] == 1);
+    assert(values[4] == 0);
+    assert(values[5] == 0);
+    assert(values[6] == 1);
+    assert(values[7] == -1);
+}
+
+int main(void)
+{
+    test_all_high_and_all_low();
+    test_single_low_and_successive_frames();
+    test_six_channel_offset_write();
+    puts("sensor snapshot tests passed");
+    return 0;
+}
