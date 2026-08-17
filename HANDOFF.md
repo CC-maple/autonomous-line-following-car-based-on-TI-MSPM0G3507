@@ -2,6 +2,29 @@
 
 本文档用于将当前 MSPM0G3507 自动行驶小车重构工程交接给下一位 agent。
 
+## 0. 2026-08-14 独立 TI Arm Clang 构建更新
+
+当前已经不再依赖 CCS 完成目标编译。新增目录 `standalone-ticlang/`，构建链使用：
+
+- MSPM0 SDK 2.01.00.03：`C:/ti/mspm0_sdk_2_01_00_03`
+- SysConfig 1.20.0+3587：`C:/ti/sysconfig_1.20.0/sysconfig_cli.bat`
+- TI Arm Clang 3.2.2.LTS：`C:/ti/ti-cgt-armllvm_3.2.2.LTS`
+- GNU Make：`D:/clion-stm32/MinGW/bin/mingw32-make.exe`
+
+已成功执行：
+
+    & "D:\clion-stm32\MinGW\bin\mingw32-make.exe" -C "E:\Ee\my_project_refactor\standalone-ticlang" all
+
+成功生成：
+
+- `standalone-ticlang/my_project_08012135.out`
+- `standalone-ticlang/my_project_08012135.map`
+- SysConfig 生成的 `ti_msp_dl_config.c/.h`、`device_linker.cmd`、`device.opt` 和 `device.cmd.genlibs`
+
+目标文件为 ARM ELF32 little-endian 可执行文件，入口地址对应 `_c_int00_noargs`；代码 32128 bytes，BSS 1085 bytes。全部 7 组 host 回归和 `git diff --check` 已再次通过。
+
+下文关于“缺少 SDK、必须安装 CCS 后才能目标编译”的内容是此前状态记录。当前仍未完成的是 XDS110 下载/启动验证和真实车辆回归；没有硬件验证前仍不要合并 main。
+
 ## 1. 当前结论
 
 源码重构阶段已完成，当前停在 CCS 目标构建和硬件验证之前。

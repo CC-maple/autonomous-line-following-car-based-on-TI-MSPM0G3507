@@ -1,0 +1,10 @@
+*.obj
+*.d
+*.out
+*.map
+*.cmd
+*.cmd.genlibs
+*.opt
+Event.dot
+ti_msp_dl_config.c
+ti_msp_dl_config.h
